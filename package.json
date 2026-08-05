@@ -11,7 +11,8 @@
     "dev:all": "concurrently -n web,signal -c cyan,magenta \"npm:dev\" \"npm:signal\"",
     "test:signal": "node test/signal.test.mjs",
     "test:e2e": "node test/e2e.test.mjs",
-    "test:coldstart": "node test/coldstart.test.mjs"
+    "test:coldstart": "node test/coldstart.test.mjs",
+    "test:origins": "node test/origins.test.mjs"
   },
   "dependencies": {
     "html5-qrcode": "^2.3.8",

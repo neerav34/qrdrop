@@ -42,17 +42,41 @@ const MAX_LABEL_LEN = 40;
 const MAX_SIZE_BYTES = 100 * 1024 * 1024 * 1024; // sanity bound on claimed size
 const MAX_SIGNAL_BYTES = 16 * 1024; // an SDP blob is a few KB at most
 
-// Comma-separated list, e.g. "https://qrdrop.vercel.app,http://localhost:3000"
+/**
+ * An `Origin` header is always scheme + host + optional port, with no path and no
+ * trailing slash. Dashboards show site URLs *with* a trailing slash though, so
+ * copying one into ALLOWED_ORIGINS used to reject every browser while curl (which
+ * sends no Origin) still passed — a maddening way to fail. Normalise both sides.
+ */
+function normaliseOrigin(value) {
+  return String(value).trim().replace(/\/+$/, "").toLowerCase();
+}
+
+// Comma-separated list, e.g. "https://qrdrop.vercel.app,http://localhost:3000".
+// A leading "*." allows any subdomain, e.g. "https://*.vercel.app" for previews.
 const ALLOWED = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
-  .map((s) => s.trim())
+  .map(normaliseOrigin)
   .filter(Boolean);
 
-const originCheck = (origin, callback) => {
+function matchesAllowList(origin) {
+  return ALLOWED.some((entry) => {
+    if (!entry.includes("*")) return entry === origin;
+    const pattern = new RegExp(
+      `^${entry.split("*").map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^.]+")}$`,
+    );
+    return pattern.test(origin);
+  });
+}
+
+const originCheck = (rawOrigin, callback) => {
   // Same-origin/native fetches send no Origin header; QR-scanned browsers always do.
-  if (!origin) return callback(null, true);
+  if (!rawOrigin) return callback(null, true);
   if (ALLOWED.length === 0) return callback(null, true); // dev default: open
-  if (ALLOWED.includes(origin)) return callback(null, true);
+
+  const origin = normaliseOrigin(rawOrigin);
+  if (matchesAllowList(origin)) return callback(null, true);
+
   // LAN testing convenience: allow private-network origins in dev only.
   if (
     process.env.NODE_ENV !== "production" &&
@@ -62,6 +86,13 @@ const originCheck = (origin, callback) => {
   ) {
     return callback(null, true);
   }
+
+  // Say exactly what was refused. Rejection surfaces to the browser as an opaque
+  // 400, so without this line the cause is invisible in the host's logs.
+  console.warn(
+    `Refused origin "${rawOrigin}" — ALLOWED_ORIGINS is [${ALLOWED.join(", ")}]. ` +
+      `Values must be scheme + host with no trailing slash or path.`,
+  );
   return callback(new Error("Origin not allowed"));
 };
 

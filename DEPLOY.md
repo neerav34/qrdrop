@@ -97,14 +97,20 @@ Back in Render → your service → **Environment**:
 ALLOWED_ORIGINS = https://qrdrop.vercel.app
 ```
 
-Use your real Vercel domain, no trailing slash. Save; Render redeploys.
+Use your real Vercel domain — **scheme + host only, no trailing slash and no
+path**. An `Origin` header never has a trailing slash, so `https://x.vercel.app/`
+would refuse every browser while `curl` still saw a healthy server. The value is
+normalised now (trailing slashes, whitespace and case are tolerated) and any
+refusal is logged as `Refused origin "…"` with the allow-list beside it.
+
+Save; Render redeploys.
 
 This is what stops any other website from driving your signaling server. Until
 you set it, the server accepts every origin.
 
-> If you later add a custom domain, or want Vercel's preview deployments to
-> work, list them comma-separated:
-> `https://qrdrop.vercel.app,https://qrdrop.example.com`
+> Multiple values are comma-separated, and a leading `*.` allows one level of
+> subdomain — handy for Vercel's per-commit preview URLs:
+> `https://qrdrop-seven.vercel.app,https://*.vercel.app`
 
 ---
 
@@ -169,6 +175,7 @@ the variable — it's compiled into the client bundle.
 
 | What you see | Cause | Fix |
 |---|---|---|
+| Browser console: `WebSocket ... failed: Unexpected response code: 400`, but `curl …/healthz` looks fine | `ALLOWED_ORIGINS` doesn't exactly match the browser's `Origin`. `curl` sends no Origin header, so it passes while every browser is refused | Set it to scheme + host with **no trailing slash and no path**. The server now normalises this and logs `Refused origin "…"` with the allow-list, so check Render → Logs |
 | `No open ports detected, continuing to scan...` and the log says `listening on …:10000??` or similar | A stray character in the host's `PORT` variable. Node reads a non-numeric string as a Unix socket path, so it opens no TCP port at all | Delete the `PORT` variable (Render injects it) or retype it as digits only, then redeploy |
 | "Can't reach the signaling server" | Wrong `NEXT_PUBLIC_SIGNAL_URL`, or set after deploying | Fix it, then **redeploy** Vercel |
 | Stuck on "Waking up the connection server" for minutes | Render service failed to boot | Check Render → Logs |
