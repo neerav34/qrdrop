@@ -1,4 +1,5 @@
 import Link from "next/link";
+import DeviceLink from "@/components/DeviceLink";
 
 export default function Home() {
   return (
@@ -8,6 +9,14 @@ export default function Home() {
           QR<span>Drop</span>
         </h1>
         <p className="tagline">Send files instantly. No upload. No account.</p>
+        <div className="hero">
+          <DeviceLink
+            from={{ device: { kind: "laptop", label: "laptop" } }}
+            to={{ device: { kind: "phone", label: "phone" } }}
+            state="moving"
+            labels={false}
+          />
+        </div>
       </div>
 
       <div className="choices">

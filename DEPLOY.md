@@ -19,7 +19,7 @@ bundle).
 | Piece | URL |
 |---|---|
 | Signaling server (Render) | <https://qrdrop-u0kg.onrender.com> — check `/healthz` |
-| Web app (Vercel) | _not deployed yet_ |
+| Web app (Vercel) | <https://qrdrop-seven.vercel.app> |
 
 > Free tiers change often. The shapes below were correct when this was written —
 > confirm the current limits when you sign up rather than trusting this file.

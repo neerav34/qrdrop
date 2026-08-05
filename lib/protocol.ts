@@ -42,6 +42,13 @@ export type ControlFrame =
   | { t: "ack" };
 
 export const CHUNK_SIZE = 16 * 1024;
+
+/**
+ * Minimum gap between progress callbacks. Without this, a 90 MB file reports
+ * ~5,700 times — one React render per 16 KB chunk — and the re-render cost eats
+ * into the transfer itself. 50ms is still smoother than the eye needs.
+ */
+export const PROGRESS_INTERVAL_MS = 50;
 /** Pause the read loop once this much is queued in the SCTP send buffer. */
 export const BUFFER_HIGH = 4 * 1024 * 1024;
 export const BUFFER_LOW = 1 * 1024 * 1024;

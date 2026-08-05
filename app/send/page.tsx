@@ -20,6 +20,9 @@ import {
   type LinkPath,
 } from "@/lib/protocol";
 
+/** Keep in step with --qr-size in globals.css, which the scan line travels. */
+const QR_SIZE = 216;
+
 const LINK_STATE: Record<SenderStatus, LinkState> = {
   connecting: "idle",
   waiting: "idle",
@@ -243,7 +246,7 @@ export default function SendPage() {
             <>
               {shareUrl ? (
                 <div className="qr-frame">
-                  <QRCodeSVG value={shareUrl} size={216} level="M" marginSize={0} />
+                  <QRCodeSVG value={shareUrl} size={QR_SIZE} level="M" marginSize={0} />
                 </div>
               ) : (
                 <div className="status">

@@ -28,6 +28,11 @@
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* Must match the `size` passed to QRCodeSVG in app/send/page.tsx — the scan
+     line travels exactly the height of the code. */
+  --qr-size: 216px;
+  --qr-pad: 16px;
 }
 
 * {
@@ -48,11 +53,46 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-body {
-  background-image:
-    radial-gradient(760px 520px at 50% -14%, rgba(0, 212, 255, 0.1), transparent 72%),
-    radial-gradient(520px 420px at 92% 108%, rgba(0, 130, 200, 0.07), transparent 70%);
-  background-repeat: no-repeat;
+/* Slow-drifting light behind everything. Radial gradients are already soft, so
+   no blur filter is needed — which keeps this cheap while a transfer saturates
+   the main thread. Transform-only, so it stays on the compositor. */
+.bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+.bg span {
+  position: absolute;
+  border-radius: 50%;
+  will-change: transform;
+}
+.bg span:nth-child(1) {
+  width: 52vmax;
+  height: 52vmax;
+  left: -14vmax;
+  top: -22vmax;
+  background: radial-gradient(circle, rgba(0, 212, 255, 0.16), transparent 62%);
+  animation: drift-a 38s ease-in-out infinite alternate;
+}
+.bg span:nth-child(2) {
+  width: 44vmax;
+  height: 44vmax;
+  right: -16vmax;
+  bottom: -20vmax;
+  background: radial-gradient(circle, rgba(0, 120, 200, 0.15), transparent 62%);
+  animation: drift-b 46s ease-in-out infinite alternate;
+}
+@keyframes drift-a {
+  to {
+    transform: translate3d(14vmax, 8vmax, 0) scale(1.12);
+  }
+}
+@keyframes drift-b {
+  to {
+    transform: translate3d(-12vmax, -9vmax, 0) scale(1.16);
+  }
 }
 
 h1,
@@ -102,6 +142,26 @@ a {
   gap: 20px;
 }
 
+/* Everything arrives rather than appearing. Children stagger, so a state change
+   mid-transfer reads as the panel rearranging itself instead of flickering. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(9px);
+  }
+}
+.panel > *,
+.card > * {
+  animation: rise 0.42s var(--ease) both;
+}
+.card > *:nth-child(2) { animation-delay: 0.05s; }
+.card > *:nth-child(3) { animation-delay: 0.1s; }
+.card > *:nth-child(4) { animation-delay: 0.15s; }
+.card > *:nth-child(5) { animation-delay: 0.2s; }
+.card > *:nth-child(6) { animation-delay: 0.25s; }
+.panel > *:nth-child(2) { animation-delay: 0.06s; }
+.panel > *:nth-child(3) { animation-delay: 0.12s; }
+
 .card {
   width: 100%;
   background: linear-gradient(180deg, var(--bg-1), rgba(11, 18, 32, 0.72));
@@ -149,7 +209,42 @@ a {
   line-height: 1;
 }
 .wordmark span {
-  color: var(--accent);
+  /* A slow highlight travelling through the accent half of the wordmark. */
+  background: linear-gradient(
+    100deg,
+    var(--accent) 20%,
+    #a8f0ff 42%,
+    var(--accent) 64%
+  );
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: sheen-text 6s ease-in-out infinite;
+}
+@keyframes sheen-text {
+  0%,
+  100% {
+    background-position: 100% 0;
+  }
+  50% {
+    background-position: 0 0;
+  }
+}
+
+/* Decorative link on the home page: says what the product does without words. */
+.hero {
+  width: 100%;
+  max-width: 250px;
+  margin: 4px auto 0;
+  opacity: 0.85;
+}
+.hero .dl-node {
+  width: 60px;
+}
+.hero .dl-glyph {
+  height: 46px;
+  transform: scale(0.82);
 }
 
 .tagline {
@@ -203,6 +298,12 @@ a {
   border-color: rgba(0, 212, 255, 0.5);
   transform: translateY(-2px);
   box-shadow: 0 10px 30px -14px rgba(0, 212, 255, 0.5);
+}
+.card-btn svg {
+  transition: transform 0.25s var(--ease);
+}
+.card-btn:hover svg {
+  transform: translateY(-3px);
 }
 .card-btn:active {
   transform: translateY(0);
@@ -308,20 +409,33 @@ a {
   box-shadow: none;
 }
 
+/* The packet is a full-width rail translated across the wire, so the motion is a
+   compositor transform rather than a per-frame `left` recalculation — worth it
+   because this animates while the main thread is busy shipping chunks. */
 .dl-pkt {
   position: absolute;
+  left: 0;
+  right: 0;
   top: 50%;
+  height: 0;
+  animation: dl-flow 1.35s linear infinite;
+  will-change: transform;
+}
+.dl-pkt::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
   width: 6px;
   height: 6px;
+  margin: -3px 0 0 -3px;
   border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 9px var(--accent);
-  transform: translate(-50%, -50%);
-  animation: dl-flow 1.35s linear infinite;
 }
 @keyframes dl-flow {
   0% {
-    left: 0%;
+    transform: translate3d(0, 0, 0);
     opacity: 0;
   }
   14% {
@@ -331,9 +445,30 @@ a {
     opacity: 1;
   }
   100% {
-    left: 100%;
+    transform: translate3d(100%, 0, 0);
     opacity: 0;
   }
+}
+
+/* While negotiating, the dashed track breathes so the wait looks intentional. */
+.dl-wire[data-state="linking"] .dl-track {
+  animation: track-pulse 1.3s ease-in-out infinite;
+}
+@keyframes track-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* A glyph replaying its entrance is how "someone just scanned" reads visually. */
+@keyframes glyph-in {
+  from {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+}
+.dl-glyph {
+  animation: glyph-in 0.44s var(--ease) both;
 }
 
 .dl-badge {
@@ -367,12 +502,57 @@ a {
 /* ============================================================ qr */
 
 .qr-frame {
-  padding: 16px;
+  position: relative;
+  overflow: hidden;
+  padding: var(--qr-pad);
   background: #fff;
   border-radius: var(--r-lg);
   border: 2px solid var(--accent);
   line-height: 0;
   animation: breathe 2.6s ease-in-out infinite;
+}
+/* A scan line drifting down the code — the one element people look at while
+   waiting, so it's the one worth animating.
+   Deliberately a thin line rather than a tinted band: the code has to stay
+   readable to a phone camera in one pass, and a translucent wash over the
+   modules costs contrast. At 3px over a 216px code this is well inside what the
+   error correction absorbs. */
+.qr-frame::after {
+  content: "";
+  position: absolute;
+  left: var(--qr-pad);
+  right: var(--qr-pad);
+  top: var(--qr-pad);
+  height: 3px;
+  border-radius: 3px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    rgba(0, 190, 235, 0) 0%,
+    rgba(0, 175, 220, 0.75) 50%,
+    rgba(0, 190, 235, 0) 100%
+  );
+  box-shadow: 0 0 12px rgba(0, 190, 235, 0.55);
+  animation: qr-sweep 3.2s ease-in-out infinite;
+  will-change: transform;
+}
+@keyframes qr-sweep {
+  0%,
+  5% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  92%,
+  100% {
+    transform: translate3d(0, calc(var(--qr-size) - 3px), 0);
+    opacity: 0;
+  }
 }
 @keyframes breathe {
   0%,
@@ -504,10 +684,35 @@ a {
   background: var(--accent);
   border-color: var(--accent);
   color: #03151d;
+  position: relative;
+  overflow: hidden;
 }
 .btn.primary:hover {
   filter: brightness(1.09);
   background: var(--accent);
+}
+.btn.primary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 34%,
+    rgba(255, 255, 255, 0.5) 50%,
+    transparent 66%
+  );
+  transform: translateX(-130%);
+}
+.btn.primary:hover::after {
+  animation: sheen 0.75s var(--ease);
+}
+@keyframes sheen {
+  to {
+    transform: translateX(130%);
+  }
+}
+.btn:active {
+  transform: scale(0.985);
 }
 .btn.wide {
   width: 100%;
@@ -635,6 +840,19 @@ a {
   }
 }
 
+/* The tick draws itself instead of popping into place. 26 is the path length of
+   the check in a 24x24 viewBox. */
+.draw {
+  stroke-dasharray: 26;
+  stroke-dashoffset: 26;
+  animation: draw 0.5s 0.12s var(--ease) forwards;
+}
+@keyframes draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
 /* ========================================================== scanner */
 
 #qr-reader {
@@ -674,12 +892,23 @@ a {
 
 @media (prefers-reduced-motion: reduce) {
   .qr-frame,
+  .qr-frame::after,
   .dl-pkt,
   .dl-badge,
   .dl-badge-warn,
+  .dl-glyph,
+  .dl-track,
   .notice-dot,
-  .tick {
-    animation: none;
+  .tick,
+  .draw,
+  .wordmark span,
+  .bg span,
+  .panel > *,
+  .card > * {
+    animation: none !important;
+  }
+  .draw {
+    stroke-dashoffset: 0;
   }
   * {
     transition-duration: 0.01ms !important;

@@ -31,6 +31,10 @@ export default function RootLayout({
         />
       </head>
       <body>
+        <div className="bg" aria-hidden>
+          <span />
+          <span />
+        </div>
         <Prewarm />
         {children}
       </body>

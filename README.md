@@ -114,6 +114,27 @@ still choosing a file, and a failed first connection is treated as "still
 waking", not as an error — the client retries for ~80 seconds and says so.
 `npm run test:coldstart` guards that behaviour.
 
+## A note on the animation layer
+
+The motion is deliberately cheap, because it runs while the main thread is busy
+shipping chunks. Everything animated is `transform`/`opacity` only, the drifting
+background fields use soft radial gradients rather than a blur filter, and the
+packets travelling the wire are a full-width rail translated on the compositor
+instead of an element with an animated `left`.
+
+Progress callbacks are throttled to one per 50ms
+([`PROGRESS_INTERVAL_MS`](lib/protocol.ts)). Reporting every 16 KB chunk meant
+~5,700 React renders for a 90 MB file, and that measurably slowed the transfer
+it was reporting on: 90 MB went 9.0s → 13.0s when the animations landed, and
+back to ~10.5s once the renders were throttled and a duplicate React key was
+fixed.
+
+The QR scan line is a 3px line rather than a translucent band on purpose — the
+code has to survive being read by a phone camera in one pass, and a wash over
+the modules costs contrast for no real gain.
+
+Everything respects `prefers-reduced-motion`.
+
 ## Security notes
 
 - **The file never reaches a server.** WebRTC data channels are DTLS-encrypted by

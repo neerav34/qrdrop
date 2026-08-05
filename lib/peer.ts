@@ -14,6 +14,7 @@ import {
   BUFFER_LOW,
   CHUNK_SIZE,
   COLD_START_ATTEMPTS,
+  PROGRESS_INTERVAL_MS,
   DISK_STREAM_THRESHOLD,
   ICE_SERVERS,
   RESUME_WINDOW_MS,
@@ -35,6 +36,20 @@ function socketOptions() {
     reconnectionAttempts: Infinity,
     reconnectionDelay: 500,
     reconnectionDelayMax: 4000,
+  };
+}
+
+/**
+ * Rate-limit progress callbacks. Each one costs a React render, and at one call
+ * per 16 KB chunk that measurably slows the transfer it is reporting on. `force`
+ * lets the final value through so the bar always lands on 100%.
+ */
+function makeProgressGate() {
+  let lastAt = 0;
+  return (now: number, force = false) => {
+    if (!force && now - lastAt < PROGRESS_INTERVAL_MS) return false;
+    lastAt = now;
+    return true;
   };
 }
 
@@ -334,6 +349,7 @@ export function startSender(file: File, cb: SenderCallbacks): SenderHandle {
     if (!awake) awake = keepAwake();
 
     const meter = makeRateMeter();
+    const gate = makeProgressGate();
     let offset = from;
     cb.onProgress({ moved: offset, total: file.size, bps: 0 });
 
@@ -357,11 +373,11 @@ export function startSender(file: File, cb: SenderCallbacks): SenderHandle {
         return; // channel went away mid-send; the relink path handles it
       }
       offset += buf.byteLength;
-      cb.onProgress({
-        moved: offset,
-        total: file.size,
-        bps: meter(offset, performance.now()),
-      });
+      const now = performance.now();
+      const bps = meter(offset, now);
+      if (gate(now, offset >= file.size)) {
+        cb.onProgress({ moved: offset, total: file.size, bps });
+      }
     }
 
     if (gen === myGen && ch.readyState === "open") {
@@ -513,6 +529,7 @@ export function startReceiver(
   let sink: Sink | null = null;
   let received = 0;
   let pc: RTCPeerConnection | null = null;
+  const gate = makeProgressGate();
   let gen = 0;
   let finished = false;
   let closed = false;
@@ -676,11 +693,11 @@ export function startReceiver(
         e.data instanceof ArrayBuffer ? e.data : new Uint8Array(e.data).buffer;
       sink?.write(buf);
       received += buf.byteLength;
-      cb.onProgress({
-        moved: received,
-        total: meta?.size ?? 0,
-        bps: meter(received, performance.now()),
-      });
+      const now = performance.now();
+      const bps = meter(received, now);
+      if (gate(now, received >= (meta?.size ?? 0))) {
+        cb.onProgress({ moved: received, total: meta?.size ?? 0, bps });
+      }
     };
 
     ch.onclose = () => {
