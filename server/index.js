@@ -52,12 +52,23 @@ function normaliseOrigin(value) {
   return String(value).trim().replace(/\/+$/, "").toLowerCase();
 }
 
+/**
+ * An entry written without a scheme ("qrdrop.vercel.app") can only have been
+ * meant as "that host, however it's reached", so expand it to both schemes
+ * rather than silently matching nothing.
+ */
+function expandEntry(entry) {
+  if (!entry) return [];
+  if (entry.includes("://")) return [entry];
+  return [`https://${entry}`, `http://${entry}`];
+}
+
 // Comma-separated list, e.g. "https://qrdrop.vercel.app,http://localhost:3000".
 // A leading "*." allows any subdomain, e.g. "https://*.vercel.app" for previews.
 const ALLOWED = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
   .map(normaliseOrigin)
-  .filter(Boolean);
+  .flatMap(expandEntry);
 
 function matchesAllowList(origin) {
   return ALLOWED.some((entry) => {

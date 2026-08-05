@@ -48,6 +48,7 @@ const logExact = boot(4202, { ALLOWED_ORIGINS: SITE });
 const logSlash = boot(4203, { ALLOWED_ORIGINS: `${SITE}/` });
 const logSpaced = boot(4204, { ALLOWED_ORIGINS: `  ${SITE.toUpperCase()} , http://localhost:3000 ` });
 const logWild = boot(4205, { ALLOWED_ORIGINS: "https://*.vercel.app" });
+const logNoScheme = boot(4206, { ALLOWED_ORIGINS: "qrdrop-seven.vercel.app" });
 await sleep(2200);
 
 try {
@@ -81,7 +82,21 @@ try {
   check("wildcard does not match a different apex", (await handshake(4205, "https://vercel.app.evil.com")) === 400);
   check("wildcard spans one label only", (await handshake(4205, "https://a.b.vercel.app")) === 400);
 
-  void logUnset, logSlash, logWild;
+  // A value written without a scheme can only have meant "that host".
+  check(
+    "an entry with no scheme still matches https",
+    (await handshake(4206, SITE)) === 200,
+  );
+  check(
+    "an entry with no scheme also matches http",
+    (await handshake(4206, "http://qrdrop-seven.vercel.app")) === 200,
+  );
+  check(
+    "an entry with no scheme does not match another host",
+    (await handshake(4206, "https://evil.example.com")) === 400,
+  );
+
+  void logUnset, logSlash, logWild, logNoScheme;
 } catch (e) {
   failed = true;
   console.log("  ✗ threw:", e.message);
