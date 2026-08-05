@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Prewarm from "@/components/Prewarm";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -29,7 +30,10 @@ export default function RootLayout({
           href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        <Prewarm />
+        {children}
+      </body>
     </html>
   );
 }

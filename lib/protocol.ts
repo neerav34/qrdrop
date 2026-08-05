@@ -59,6 +59,14 @@ export const MEMORY_WARN_THRESHOLD = 2 * 1024 * 1024 * 1024;
 /** How long a client keeps trying to re-establish a dropped transfer. */
 export const RESUME_WINDOW_MS = 120_000;
 
+/**
+ * Free hosting tiers idle their containers out, so the very first connection of
+ * the day can take the better part of a minute while the signaling server boots.
+ * Keep retrying for this many attempts before calling it unreachable — with
+ * socket.io's backoff that's roughly 80 seconds.
+ */
+export const COLD_START_ATTEMPTS = 20;
+
 export const ICE_SERVERS: RTCIceServer[] = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
 ];

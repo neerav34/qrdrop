@@ -13,6 +13,7 @@ import {
   BUFFER_HIGH,
   BUFFER_LOW,
   CHUNK_SIZE,
+  COLD_START_ATTEMPTS,
   DISK_STREAM_THRESHOLD,
   ICE_SERVERS,
   RESUME_WINDOW_MS,
@@ -102,6 +103,16 @@ async function readPath(p: RTCPeerConnection): Promise<LinkPath | null> {
   };
 }
 
+/**
+ * A free-tier container that has idled out takes a while to boot. Say so instead
+ * of claiming the server is unreachable on the first failed attempt.
+ */
+function coldStartNotice(attempt: number): string {
+  return attempt <= 2
+    ? "Reaching the connection server…"
+    : "Waking up the connection server — free hosting can take up to a minute.";
+}
+
 /** Wait for the send buffer to drain, but never hang if the channel dies. */
 function waitForDrain(ch: RTCDataChannel): Promise<void> {
   return new Promise((resolve) => {
@@ -163,6 +174,7 @@ export function startSender(file: File, cb: SenderCallbacks): SenderHandle {
   let linkPending: ReturnType<typeof setTimeout> | null = null;
   let watchdog: ReturnType<typeof setTimeout> | null = null;
   let pending: RTCIceCandidateInit[] = [];
+  let connectFailures = 0;
 
   cb.onStatus("connecting");
 
@@ -358,6 +370,8 @@ export function startSender(file: File, cb: SenderCallbacks): SenderHandle {
   }
 
   socket.on("connect", () => {
+    connectFailures = 0;
+    cb.onNotice(null);
     if (sessionId && token) {
       // Same participant, new socket: re-attach rather than start over.
       socket.emit(
@@ -395,11 +409,17 @@ export function startSender(file: File, cb: SenderCallbacks): SenderHandle {
   });
 
   socket.on("connect_error", () => {
-    if (!sessionId) {
-      fatal(`Can't reach the signaling server at ${SIGNAL_URL}. Is it running?`);
-    } else {
+    if (sessionId) {
       pause("Lost the connection. Reconnecting…");
+      return;
     }
+    // socket.io is already retrying with backoff — let it, and explain the wait.
+    connectFailures++;
+    if (connectFailures <= COLD_START_ATTEMPTS) {
+      cb.onNotice(coldStartNotice(connectFailures));
+      return;
+    }
+    fatal(`Can't reach the signaling server at ${SIGNAL_URL}. Is it running?`);
   });
 
   socket.on("receiver-ready", (info: { device?: DeviceInfo }) => {
@@ -500,6 +520,7 @@ export function startReceiver(
   let deadline: ReturnType<typeof setTimeout> | null = null;
   let nudgeTimer: ReturnType<typeof setTimeout> | null = null;
   let pending: RTCIceCandidateInit[] = [];
+  let connectFailures = 0;
   const meter = makeRateMeter();
 
   cb.onStatus("connecting");
@@ -692,6 +713,8 @@ export function startReceiver(
   }
 
   socket.on("connect", () => {
+    connectFailures = 0;
+    cb.onNotice(null);
     if (token) {
       socket.emit(
         "rejoin",
@@ -720,11 +743,16 @@ export function startReceiver(
   });
 
   socket.on("connect_error", () => {
-    if (!meta) {
-      fatal(`Can't reach the signaling server at ${SIGNAL_URL}. Is it running?`);
-    } else {
+    if (meta) {
       pause("Lost the connection. Reconnecting…");
+      return;
     }
+    connectFailures++;
+    if (connectFailures <= COLD_START_ATTEMPTS) {
+      cb.onNotice(coldStartNotice(connectFailures));
+      return;
+    }
+    fatal(`Can't reach the signaling server at ${SIGNAL_URL}. Is it running?`);
   });
 
   socket.on("peer-offline", () => {

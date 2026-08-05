@@ -86,27 +86,33 @@ npm run test:e2e         # drives two real Chrome tabs: a 3 MB transfer verified
                          # byte-for-byte, then a 64 MB transfer whose link is cut
                          # mid-flight and must resume and still match by sha256
 RESUME_RUNS=5 npm run test:e2e   # repeat the resume scenario to shake out races
+
+npm run dev              # signal server NOT running
+npm run test:coldstart   # points the page at a dead signaling server: must wait
+                         # rather than fail, then recover once it answers
 ```
 
-Both suites pass on the current tree (28 + 39 checks). Leave a minute between
+All three suites pass on the current tree (28 + 18 + 4 checks; 39 in the e2e with `RESUME_RUNS=4`). Leave a minute between
 them — the signal suite deliberately trips the 10-sessions-per-IP-per-minute
 limit, which would otherwise refuse the e2e run's own session. And don't run
 `next build` while `next dev` is live; they share `.next`.
 
 ## Deploy
 
-**Signaling server → Railway** (or Render/Fly — anything that keeps a WebSocket
-open; Vercel's serverless functions cannot).
+Step-by-step, entirely on free tiers: **[DEPLOY.md](DEPLOY.md)**.
 
-1. New project → deploy from this repo → set the root directory to `server/`.
-2. Set `ALLOWED_ORIGINS=https://your-app.vercel.app` and `NODE_ENV=production`.
-3. Copy the public URL Railway gives you.
+In short — the signaling server goes to Render (a free Web Service, because it
+must hold WebSockets open, which Vercel's serverless functions cannot), the web
+app goes to Vercel, and `ALLOWED_ORIGINS` then locks the two together. Deploy the
+signaling server first: its URL is a `NEXT_PUBLIC_` variable, so it is compiled
+into the client bundle.
 
-**Web app → Vercel.**
-
-1. Import the repo (root directory = repo root).
-2. Set `NEXT_PUBLIC_SIGNAL_URL` to the Railway URL from above.
-3. Deploy. HTTPS is automatic, which is what WebRTC needs.
+Free hosting idles the signaling server out after ~15 minutes, and waking it
+takes 30–60 seconds. Every page pings `/healthz` on load
+([components/Prewarm.tsx](components/Prewarm.tsx)) so it boots while the user is
+still choosing a file, and a failed first connection is treated as "still
+waking", not as an error — the client retries for ~80 seconds and says so.
+`npm run test:coldstart` guards that behaviour.
 
 ## Security notes
 
