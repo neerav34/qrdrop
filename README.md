@@ -99,7 +99,18 @@ limit, which would otherwise refuse the e2e run's own session. And don't run
 
 ## Deploy
 
+**Live:** <https://qrdrop-seven.vercel.app> (signaling on Render).
 Step-by-step, entirely on free tiers: **[DEPLOY.md](DEPLOY.md)**.
+
+The e2e suite runs against the deployment too, which is how the live stack was
+verified end to end:
+
+```bash
+E2E_URL=https://qrdrop-seven.vercel.app RESUME_RUNS=0 npm run test:e2e
+```
+
+`RESUME_RUNS=0` skips the resume scenario there, because the test hook it needs
+is stripped from production builds.
 
 In short — the signaling server goes to Render (a free Web Service, because it
 must hold WebSockets open, which Vercel's serverless functions cannot), the web
