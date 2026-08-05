@@ -94,8 +94,13 @@ bundle).
 Back in Render → your service → **Environment**:
 
 ```
-ALLOWED_ORIGINS = https://qrdrop.vercel.app
+ALLOWED_ORIGINS = https://qrdrop-seven.vercel.app
 ```
+
+**Use the domain Vercel actually gave you, not the one in an example.** Vercel
+appends a suffix when the bare project name is taken (`qrdrop` →
+`qrdrop-seven`), so the value above is this project's real domain — check yours
+in the Vercel dashboard before pasting anything.
 
 Use your real Vercel domain — **scheme + host only, no trailing slash and no
 path**. An `Origin` header never has a trailing slash, so `https://x.vercel.app/`
@@ -175,7 +180,8 @@ the variable — it's compiled into the client bundle.
 
 | What you see | Cause | Fix |
 |---|---|---|
-| Browser console: `WebSocket ... failed: Unexpected response code: 400`, but `curl …/healthz` looks fine | `ALLOWED_ORIGINS` doesn't exactly match the browser's `Origin`. `curl` sends no Origin header, so it passes while every browser is refused | Set it to scheme + host with **no trailing slash and no path**. The server now normalises this and logs `Refused origin "…"` with the allow-list, so check Render → Logs |
+| Browser console: `WebSocket ... failed: Unexpected response code: 400`, but `curl …/healthz` looks fine | `ALLOWED_ORIGINS` doesn't match the browser's `Origin` — often the wrong Vercel subdomain, or a trailing slash. `curl` sends no Origin header, so it passes while every browser is refused | Read Render → Logs for `Refused origin "X" — ALLOWED_ORIGINS is [Y]`, which prints both values side by side. Set it to scheme + host, no trailing slash |
+| `PORT="…" is not a valid port number — falling back to 4000` | Stray characters in the `PORT` variable | Harmless (the fallback binds and Render detects it), but fix the value to digits only or delete it |
 | `No open ports detected, continuing to scan...` and the log says `listening on …:10000??` or similar | A stray character in the host's `PORT` variable. Node reads a non-numeric string as a Unix socket path, so it opens no TCP port at all | Delete the `PORT` variable (Render injects it) or retype it as digits only, then redeploy |
 | "Can't reach the signaling server" | Wrong `NEXT_PUBLIC_SIGNAL_URL`, or set after deploying | Fix it, then **redeploy** Vercel |
 | Stuck on "Waking up the connection server" for minutes | Render service failed to boot | Check Render → Logs |
