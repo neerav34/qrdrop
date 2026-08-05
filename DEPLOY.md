@@ -14,6 +14,13 @@ WebSocket open, and signaling is nothing but a long-lived socket.
 its URL at build time (it's a `NEXT_PUBLIC_` variable, so it's baked into the
 bundle).
 
+**Live deployment**
+
+| Piece | URL |
+|---|---|
+| Signaling server (Render) | <https://qrdrop-u0kg.onrender.com> — check `/healthz` |
+| Web app (Vercel) | _not deployed yet_ |
+
 > Free tiers change often. The shapes below were correct when this was written —
 > confirm the current limits when you sign up rather than trusting this file.
 
@@ -71,7 +78,7 @@ bundle).
 4. Expand **Environment Variables** and add, using the URL from Part 1:
 
    ```
-   NEXT_PUBLIC_SIGNAL_URL = https://qrdrop-signal.onrender.com
+   NEXT_PUBLIC_SIGNAL_URL = https://qrdrop-u0kg.onrender.com
    ```
 
    No trailing slash. It must be `https`, not `http`, or the browser will block
