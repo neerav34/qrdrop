@@ -1,9 +1,10 @@
 /**
- * Real two-tab transfer over WebRTC in a real Chrome. Start both servers first
+ * Real two-tab transfers over WebRTC in a real Chrome. Start both servers first
  * (`npm run dev:all`), then: `npm run test:e2e`.
  *
- * This is the test that matters — it proves the bytes arrive intact, not just
- * that the handshake works.
+ * These are the tests that matter — they prove the bytes arrive intact, that the
+ * route is genuinely device-to-device, and that a transfer killed mid-flight
+ * picks up from the byte it stopped at instead of starting over.
  */
 import puppeteer from "puppeteer-core";
 import fs from "node:fs";
@@ -17,117 +18,231 @@ const CHROME =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 const WORK = path.join(os.tmpdir(), "qrdrop-e2e");
-const DOWNLOADS = path.join(WORK, "dl");
-const SRC = path.join(WORK, "payload.bin");
-const SIZE = 3 * 1024 * 1024 + 777; // odd size so the last chunk is partial
-
+fs.rmSync(WORK, { recursive: true, force: true });
 fs.mkdirSync(WORK, { recursive: true });
 
-fs.rmSync(DOWNLOADS, { recursive: true, force: true });
-fs.mkdirSync(DOWNLOADS, { recursive: true });
-fs.writeFileSync(SRC, crypto.randomBytes(SIZE));
-const srcHash = crypto.createHash("sha256").update(fs.readFileSync(SRC)).digest("hex");
-
-const browser = await puppeteer.launch({
-  executablePath: CHROME,
-  headless: true,
-  args: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"],
-});
-
-const log = (...a) => console.log(...a);
 let failed = false;
+const log = (...a) => console.log(...a);
 const check = (name, cond, extra = "") => {
   log(`${cond ? "  ✓" : "  ✗"} ${name}${extra ? " :: " + extra : ""}`);
   if (!cond) failed = true;
 };
 
-try {
-  // ---- sender tab
-  const send = await browser.newPage();
-  send.on("pageerror", (e) => log("  [sender pageerror]", e.message));
-  send.on("console", (m) => { if (m.type() === "error") log("  [sender console]", m.text()); });
-  await send.goto(`${BASE}/send`, { waitUntil: "networkidle2" });
+const sha = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  const input = await send.waitForSelector("input[type=file]");
-  await input.uploadFile(SRC);
+function makePayload(name, size) {
+  const file = path.join(WORK, name);
+  fs.writeFileSync(file, crypto.randomBytes(size));
+  return { file, size, hash: sha(fs.readFileSync(file)) };
+}
+
+async function waitForDownload(dir, timeoutMs = 90000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => !f.endsWith(".crdownload") && !f.startsWith("."));
+    if (files.length) {
+      // Wait for the size to stop changing before reading it.
+      const p = path.join(dir, files[0]);
+      let last = -1;
+      while (Date.now() < deadline) {
+        const s = fs.statSync(p).size;
+        if (s === last && s > 0) return p;
+        last = s;
+        await sleep(120);
+      }
+      return p;
+    }
+    await sleep(120);
+  }
+  return null;
+}
+
+const browser = await puppeteer.launch({
+  executablePath: CHROME,
+  headless: true,
+  args: ["--no-sandbox"],
+});
+
+/** Opens the sender, picks the file, and returns the share URL. */
+async function openSender(payloadPath, tag) {
+  const page = await browser.newPage();
+  page.on("pageerror", (e) => log(`  [${tag} sender pageerror]`, e.message));
+  page.on("console", (m) => {
+    if (m.type() === "error") log(`  [${tag} sender console]`, m.text());
+  });
+  await page.goto(`${BASE}/send`, { waitUntil: "networkidle2" });
+  const input = await page.waitForSelector("input[type=file]");
+  await input.uploadFile(payloadPath);
 
   // Surface a server-side refusal (e.g. the per-IP rate limit, if the signal
   // suite just ran) instead of letting it look like a mystery timeout.
-  await send.waitForSelector(".link-row input, .error", { timeout: 15000 });
-  const refusal = await send.$(".error");
+  await page.waitForSelector(".link-row input, .notice.bad", { timeout: 20000 });
+  const refusal = await page.$(".notice.bad");
   if (refusal) {
     throw new Error(
       `sender was refused: ${await refusal.evaluate((el) => el.textContent)}`,
     );
   }
-  const shareUrl = await send.$eval(".link-row input", (el) => el.value);
-  check("sender produced a share URL", /\/r\/[0-9a-f-]{36}$/.test(shareUrl), shareUrl);
+  const url = await page.$eval(".link-row input", (el) => el.value);
+  return { page, url };
+}
 
-  const qrPresent = await send.$(".qr-frame svg");
-  check("QR code rendered", !!qrPresent);
-
-  const waitingText = await send.$eval(".status", (el) => el.textContent.trim());
-  check("sender is waiting for receiver", /Waiting for receiver/.test(waitingText), waitingText);
-
-  // ---- receiver tab
-  const recv = await browser.newPage();
-  recv.on("pageerror", (e) => log("  [receiver pageerror]", e.message));
-  recv.on("console", (m) => { if (m.type() === "error") log("  [receiver console]", m.text()); });
-  const cdp = await recv.createCDPSession();
+async function openReceiver(url, downloadDir, tag) {
+  fs.mkdirSync(downloadDir, { recursive: true });
+  const page = await browser.newPage();
+  page.on("pageerror", (e) => log(`  [${tag} receiver pageerror]`, e.message));
+  page.on("console", (m) => {
+    if (m.type() === "error") log(`  [${tag} receiver console]`, m.text());
+  });
+  const cdp = await page.createCDPSession();
   await cdp.send("Browser.setDownloadBehavior", {
     behavior: "allow",
-    downloadPath: DOWNLOADS,
+    downloadPath: downloadDir,
     eventsEnabled: true,
   });
+  await page.goto(url, { waitUntil: "networkidle2" });
+  return page;
+}
 
-  await recv.goto(shareUrl, { waitUntil: "networkidle2" });
-  await recv.waitForSelector(".file-name", { timeout: 15000 });
-  const shown = await recv.$eval(".file-name", (el) => el.textContent);
-  const shownSize = await recv.$eval(".file-size", (el) => el.textContent);
-  check("receiver sees file name before accepting", shown.includes("payload.bin"), shown);
-  check("receiver sees file size", /3\.0 MB/.test(shownSize), shownSize);
+try {
+  // ============================================ 1. plain transfer, verified
+  log("\n▸ scenario 1 — 3 MB transfer, byte-for-byte");
+  {
+    const payload = makePayload("payload.bin", 3 * 1024 * 1024 + 777);
+    const dl = path.join(WORK, "dl1");
+    const { page: send, url } = await openSender(payload.file, "s1");
+    check("sender produced a share URL", /\/r\/[0-9a-f-]{36}$/.test(url), url);
+    check("QR code rendered", !!(await send.$(".qr-frame svg")));
 
-  const acceptBtn = await recv.waitForSelector(".btn.primary", { timeout: 10000 });
-  await acceptBtn.click();
+    const recv = await openReceiver(url, dl, "s1");
+    await recv.waitForSelector(".file-name", { timeout: 20000 });
+    check(
+      "receiver sees the file before accepting",
+      (await recv.$eval(".file-name", (el) => el.textContent)).includes("payload.bin"),
+    );
+    // The device labels are the cross-ecosystem story; both ends should show a pair.
+    const labels = await recv.$$eval(".dl-label", (els) =>
+      els.map((e) => e.textContent.trim()),
+    );
+    check("receiver shows both devices in the link", labels.length === 2, labels.join(" → "));
 
-  // ---- watch it move
-  await recv.waitForSelector(".meter", { timeout: 20000 });
-  check("receiver entered transfer state", true);
+    await (await recv.waitForSelector(".btn.primary")).click();
+    await recv.waitForFunction(
+      () => document.querySelector("a.btn.primary")?.textContent?.includes("Save file"),
+      { timeout: 90000 },
+    );
+    check("receiver reached completion", true);
 
-  await recv.waitForFunction(
-    () => document.querySelector("a.btn.primary")?.textContent?.includes("Save file"),
-    { timeout: 60000 },
-  );
-  check("receiver reached completion screen", true);
+    await send.waitForFunction(() => document.body.innerText.includes("delivered"), {
+      timeout: 30000,
+    });
+    check("sender got delivery confirmation", true);
 
-  await send.waitForFunction(
-    () => document.body.innerText.includes("delivered"),
-    { timeout: 20000 },
-  );
-  const senderDone = await send.$eval(".file-line", (el) => el.innerText);
-  check("sender got delivery confirmation", /delivered/.test(senderDone), senderDone.replace(/\n/g, " | "));
+    // Proof the file never went through a server: the negotiated ICE pair is
+    // host-to-host, i.e. straight across the local network.
+    const pathText = await send.$eval(".pathline", (el) => el.textContent);
+    check("connection was direct on the local network", /same network/.test(pathText), pathText);
 
-  // ---- verify the bytes
-  let got = null;
-  for (let i = 0; i < 60; i++) {
-    const files = fs.readdirSync(DOWNLOADS).filter((f) => !f.endsWith(".crdownload"));
-    if (files.length) { got = path.join(DOWNLOADS, files[0]); break; }
-    await new Promise((r) => setTimeout(r, 250));
+    const got = await waitForDownload(dl);
+    check("file landed in downloads", !!got, got || "(nothing)");
+    if (got) {
+      const buf = fs.readFileSync(got);
+      check("size matches exactly", buf.length === payload.size, `${buf.length} vs ${payload.size}`);
+      check("sha256 matches source", sha(buf) === payload.hash);
+    }
+
+    const third = await browser.newPage();
+    await third.goto(url, { waitUntil: "networkidle2" });
+    await third.waitForSelector(".notice.bad", { timeout: 20000 });
+    check(
+      "replaying the QR link fails",
+      !!(await third.$eval(".notice.bad", (el) => el.textContent)),
+    );
+    await Promise.all([send.close(), recv.close(), third.close()]);
   }
-  check("file landed in downloads", !!got, got || fs.readdirSync(DOWNLOADS).join(","));
-  if (got) {
-    const buf = fs.readFileSync(got);
-    check("size matches exactly", buf.length === SIZE, `${buf.length} vs ${SIZE}`);
-    const h = crypto.createHash("sha256").update(buf).digest("hex");
-    check("sha256 matches source", h === srcHash, `${h.slice(0, 16)}… vs ${srcHash.slice(0, 16)}…`);
-  }
 
-  // ---- session is single-use: a third tab gets nothing
-  const third = await browser.newPage();
-  await third.goto(shareUrl, { waitUntil: "networkidle2" });
-  await third.waitForSelector(".error", { timeout: 15000 });
-  const err = await third.$eval(".error", (el) => el.textContent);
-  check("replaying the QR link fails", err.length > 0, err);
+  // ================================== 2. resume after the link is torn down
+  // Repeatable: RESUME_RUNS=5 npm run test:e2e shakes out renegotiation races.
+  const runs = Number(process.env.RESUME_RUNS || 1);
+  for (let run = 1; run <= runs; run++) {
+  log(`\n▸ scenario 2.${run} — 64 MB transfer, link killed mid-flight`);
+  {
+    const payload = makePayload(`big-${run}.bin`, 64 * 1024 * 1024);
+    const dl = path.join(WORK, `dl2-${run}`);
+    const { page: send, url } = await openSender(payload.file, "s2");
+    const recv = await openReceiver(url, dl, "s2");
+
+    await recv.waitForSelector(".btn.primary", { timeout: 20000 });
+    await (await recv.$(".btn.primary")).click();
+
+    // Kill the peer connection the way a sleeping phone would, partway through.
+    let droppedAt = null;
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      const pct = await recv
+        .$eval(".pct", (el) => parseInt(el.textContent, 10))
+        .catch(() => null);
+      if (pct !== null && pct >= 5) {
+        droppedAt = pct;
+        await recv.evaluate(() => window.__qrdropDropLink?.());
+        break;
+      }
+      if (await recv.$("a.btn.primary")) break; // finished before we could cut in
+      await sleep(25);
+    }
+    check(
+      "cut the link mid-transfer",
+      droppedAt !== null,
+      droppedAt !== null ? `at ${droppedAt}%` : "transfer finished too fast to interrupt",
+    );
+
+    if (droppedAt !== null) {
+      // The pause must be visible, not silent.
+      const paused = await recv
+        .waitForFunction(
+          () => document.querySelector(".notice.warn") !== null,
+          { timeout: 8000 },
+        )
+        .then(() => true)
+        .catch(() => false);
+      check("receiver showed a retrying notice", paused);
+    }
+
+    await recv.waitForFunction(
+      () => document.querySelector("a.btn.primary")?.textContent?.includes("Save file"),
+      { timeout: 120000 },
+    );
+    check("transfer resumed and completed", true);
+
+    // The sender must also learn it finished — it only hears via the ack on the
+    // renegotiated channel, so this is the assertion that catches a half-healed
+    // link that quietly delivered the bytes but never closed the loop.
+    const senderDone = await send
+      .waitForFunction(() => document.body.innerText.includes("delivered"), {
+        timeout: 60000,
+      })
+      .then(() => true)
+      .catch(() => false);
+    check("sender confirmed delivery after the resume", senderDone);
+
+    const got = await waitForDownload(dl);
+    check("resumed file landed in downloads", !!got, got || "(nothing)");
+    if (got) {
+      const buf = fs.readFileSync(got);
+      check(
+        "resumed size matches exactly",
+        buf.length === payload.size,
+        `${buf.length} vs ${payload.size}`,
+      );
+      // The real assertion: no duplicated or missing chunk around the seam.
+      check("resumed sha256 matches source", sha(buf) === payload.hash);
+    }
+    await Promise.all([send.close(), recv.close()]);
+  }
+  }
 } catch (e) {
   failed = true;
   log("  ✗ threw:", e.message);

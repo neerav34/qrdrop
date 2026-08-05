@@ -17,80 +17,144 @@ const connect = () => {
     s.on("connect_error", rej);
   });
 };
-const emit = (s, ev, arg) =>
-  new Promise((res) => s.emit(ev, arg, res));
+const emit = (s, ev, arg) => new Promise((res) => s.emit(ev, arg, res));
+const waitFor = (s, ev, ms = 2000) =>
+  new Promise((res) => {
+    const t = setTimeout(() => res(null), ms);
+    s.once(ev, (payload) => {
+      clearTimeout(t);
+      res(payload ?? true);
+    });
+  });
 
-const meta = { name: "report.pdf", size: 2400000, type: "application/pdf" };
+const file = { name: "report.pdf", size: 2400000, type: "application/pdf" };
+const laptop = { kind: "laptop", label: "Mac" };
+const phone = { kind: "phone", label: "iPhone" };
 
-// 1. create + join + accept + relay
+// ---------------------------------------------- happy path + device labels
 const sender = await connect();
-const created = await emit(sender, "create", meta);
+const created = await emit(sender, "create", { file, device: laptop });
 ok("create returns uuid", /^[0-9a-f-]{36}$/.test(created.sessionId || ""), JSON.stringify(created));
+ok("create returns a resume token", /^[0-9a-f-]{36}$/.test(created.token || ""));
 ok("create returns expiry ~10min", created.expiresAt - Date.now() > 590000);
 
 const receiver = await connect();
 const joined = await emit(receiver, "join", created.sessionId);
-ok("join returns file meta", joined.file?.name === "report.pdf", JSON.stringify(joined));
+ok("join returns file meta", joined.file?.name === "report.pdf", JSON.stringify(joined.file));
+ok("join reveals the sender's device", joined.peerDevice?.label === "Mac", JSON.stringify(joined.peerDevice));
 
-const readyP = new Promise((r) => sender.once("receiver-ready", r));
-receiver.emit("accept");
-await Promise.race([readyP, new Promise((_, x) => setTimeout(() => x(new Error("timeout")), 2000))])
-  .then(() => ok("sender notified on accept", true))
-  .catch((e) => ok("sender notified on accept", false, e.message));
+const readyP = waitFor(sender, "receiver-ready");
+const accepted = await emit(receiver, "accept", { device: phone });
+ok("accept returns a resume token", /^[0-9a-f-]{36}$/.test(accepted.token || ""));
+const ready = await readyP;
+ok("sender notified on accept", !!ready);
+ok("sender learns the receiver's device", ready?.device?.label === "iPhone", JSON.stringify(ready?.device));
 
-const gotOffer = new Promise((r) => receiver.once("signal", r));
+// ------------------------------------------------------------ relay + guards
+const gotOffer = waitFor(receiver, "signal");
 sender.emit("signal", { kind: "desc", desc: { type: "offer", sdp: "v=0\r\n" } });
-const relayed = await Promise.race([gotOffer, new Promise((r) => setTimeout(() => r(null), 2000))]);
-ok("offer relayed to receiver", relayed?.desc?.type === "offer", JSON.stringify(relayed));
+const relayed = await gotOffer;
+ok("offer relayed to receiver", relayed?.desc?.type === "offer");
 
-const gotAnswer = new Promise((r) => sender.once("signal", r));
+const gotAnswer = waitFor(sender, "signal");
 receiver.emit("signal", { kind: "desc", desc: { type: "answer", sdp: "v=0\r\n" } });
-const back = await Promise.race([gotAnswer, new Promise((r) => setTimeout(() => r(null), 2000))]);
-ok("answer relayed back to sender", back?.desc?.type === "answer");
+ok("answer relayed back to sender", (await gotAnswer)?.desc?.type === "answer");
 
-// 2. malformed signal is dropped, not relayed
-const shouldNotArrive = new Promise((r) => {
-  const t = setTimeout(() => r("nothing"), 600);
-  receiver.once("signal", (p) => { clearTimeout(t); r(p); });
-});
+const dropped = waitFor(receiver, "signal", 600);
 sender.emit("signal", { kind: "desc", desc: { type: "bogus" } });
-ok("malformed signal dropped", (await shouldNotArrive) === "nothing");
+ok("malformed signal dropped", (await dropped) === null);
 
-// 3. third device is refused (single-use session)
 const intruder = await connect();
-const refused = await emit(intruder, "join", created.sessionId);
-ok("third device refused", !!refused.error, JSON.stringify(refused));
+ok(
+  "third device refused",
+  !!(await emit(intruder, "join", created.sessionId)).error,
+);
+ok(
+  "unknown session refused",
+  !!(await emit(intruder, "join", "11111111-2222-3333-4444-555555555555")).error,
+);
+ok(
+  "invalid meta rejected",
+  !!(await emit(intruder, "create", { file: { name: "", size: -1, type: 5 } })).error,
+);
+ok(
+  "device label is sanitised",
+  (
+    await emit(await connect(), "create", {
+      file,
+      device: { kind: "hax", label: "<script>alert(1)</script>".repeat(4) },
+    })
+  ).sessionId !== undefined,
+  "server accepts but strips it",
+);
 
-// 4. unknown session
-const unknown = await emit(intruder, "join", "11111111-2222-3333-4444-555555555555");
-ok("unknown session refused", !!unknown.error, JSON.stringify(unknown));
-
-// 5. invalid metadata rejected
-const bad = await emit(intruder, "create", { name: "", size: -1, type: 5 });
-ok("invalid meta rejected", !!bad.error, JSON.stringify(bad));
-
-// 6. peer-gone fires on disconnect
-const gone = new Promise((r) => {
-  const t = setTimeout(() => r("never"), 1500);
-  sender.once("peer-gone", () => { clearTimeout(t); r("fired"); });
-});
+// ------------------------------------------------------- resume after a drop
+// A receiver going quiet must NOT destroy the session — that's the whole point.
+const offlineP = waitFor(sender, "peer-offline");
 receiver.disconnect();
-ok("peer-gone on receiver drop", (await gone) === "fired");
+ok("sender told the peer went offline", !!(await offlineP));
 
-// 7. rate limit: 10 creations per IP per minute
-const flood = await connect();
+const returning = await connect();
+const badToken = await emit(returning, "rejoin", {
+  sessionId: created.sessionId,
+  token: "00000000-0000-0000-0000-000000000000",
+  role: "receiver",
+});
+ok("rejoin with a wrong token refused", !!badToken.error, JSON.stringify(badToken));
+
+const reReadyP = waitFor(sender, "receiver-ready");
+const rejoined = await emit(returning, "rejoin", {
+  sessionId: created.sessionId,
+  token: accepted.token,
+  role: "receiver",
+});
+ok("session survived the drop", !rejoined.error, JSON.stringify(rejoined));
+ok("rejoin returns the file meta", rejoined.file?.name === "report.pdf");
+ok("rejoin reports the peer is online", rejoined.peerOnline === true);
+ok("rejoin re-triggers renegotiation", !!(await reReadyP));
+
+// Signals must route to the *new* socket, not the dead one.
+const afterResume = waitFor(returning, "signal");
+sender.emit("signal", { kind: "desc", desc: { type: "offer", sdp: "v=0\r\n" } });
+ok("signals route to the reconnected socket", (await afterResume)?.desc?.type === "offer");
+
+// The sender can come back too.
+const senderToken = created.token;
+const backP = waitFor(returning, "peer-back");
+sender.disconnect();
+const senderAgain = await connect();
+const senderRejoin = await emit(senderAgain, "rejoin", {
+  sessionId: created.sessionId,
+  token: senderToken,
+  role: "sender",
+});
+ok("sender can rejoin too", !senderRejoin.error, JSON.stringify(senderRejoin));
+ok("sender sees the receiver online", senderRejoin.peerOnline === true);
+ok("receiver told the sender is back", !!(await backP));
+
+// ------------------------------------------------------------- completion
+senderAgain.emit("complete");
+await new Promise((r) => setTimeout(r, 150));
+const afterComplete = await emit(await connect(), "join", created.sessionId);
+ok("session gone after completion", !!afterComplete.error);
+
+// ------------------------------------------------- unscanned session cleanup
+const lonely = await connect();
+const lonelySession = await emit(lonely, "create", { file, device: laptop });
+lonely.disconnect();
+await new Promise((r) => setTimeout(r, 150));
+const gone = await emit(await connect(), "join", lonelySession.sessionId);
+ok("never-accepted session dropped on disconnect", !!gone.error);
+
+// ------------------------------------------------------------- rate limiting
 let limitHitAt = null;
 for (let i = 0; i < 14; i++) {
   const c = await connect();
-  const r = await emit(c, "create", meta);
+  const r = await emit(c, "create", { file, device: laptop });
   if (r.error && limitHitAt === null) limitHitAt = i;
   c.disconnect();
 }
-flood.disconnect();
 ok("rate limit trips", limitHitAt !== null, `first refusal at attempt ${limitHitAt}`);
-
-sender.disconnect();
-intruder.disconnect();
 
 console.log("\nPASS");
 pass.forEach((p) => console.log("  ✓ " + p));

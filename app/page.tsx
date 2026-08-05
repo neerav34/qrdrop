@@ -32,9 +32,9 @@ export default function Home() {
       </div>
 
       <p className="footnote">
-        Works on any device with a browser. The file travels straight between the
-        two devices over an encrypted peer-to-peer channel — it never touches a
-        server.
+        Phone, laptop, iPhone, Android — anything with a browser, in any
+        combination. The file travels straight between the two devices over an
+        encrypted peer-to-peer channel and never touches a server.
       </p>
     </main>
   );

@@ -23,6 +23,19 @@ export function clock(ms: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+/** Plain-language summary of the route the file is taking. */
+export function pathLabel(p: {
+  localType: string;
+  remoteType: string;
+  relayed: boolean;
+}): string {
+  if (p.relayed) return "Relayed connection";
+  if (p.localType === "host" && p.remoteType === "host") {
+    return "Direct · same network";
+  }
+  return "Direct · peer-to-peer";
+}
+
 export function eta(remainingBytes: number, bytesPerSec: number): string {
   if (bytesPerSec <= 0) return "—";
   const secs = Math.ceil(remainingBytes / bytesPerSec);

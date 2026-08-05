@@ -43,11 +43,11 @@ export default function ReceivePage() {
             /* per-frame "no code found" — not an error worth showing */
           },
         );
-      } catch (e) {
+      } catch {
         setError(
           window.isSecureContext
             ? "Could not open the camera. Allow camera access, or paste the link below."
-            : "Camera needs HTTPS. Open this page over https (or use localhost), or paste the link below.",
+            : "The camera needs HTTPS. Open this page over https (or on localhost), or paste the link below.",
         );
       }
     })();
@@ -61,29 +61,41 @@ export default function ReceivePage() {
   return (
     <main className="shell">
       <div className="panel">
-        <Link className="back" href="/">
-          ← Back
-        </Link>
+        <div className="topbar">
+          <Link className="back" href="/">
+            ← Back
+          </Link>
+        </div>
         <h2>Scan the sender&apos;s code</h2>
 
-        {error ? <div className="error">{error}</div> : <div id="qr-reader" />}
+        <div className="card">
+          {error ? (
+            <div className="notice bad">
+              <span className="notice-dot" />
+              {error}
+            </div>
+          ) : (
+            <div id="qr-reader" />
+          )}
 
-        <div className="link-row">
-          <input
-            placeholder="…or paste the transfer link"
-            value={manual}
-            onChange={(e) => setManual(e.target.value)}
-          />
-          <button
-            className="btn"
-            disabled={!sessionFrom(manual)}
-            onClick={() => {
-              const id = sessionFrom(manual);
-              if (id) router.push(`/r/${id}`);
-            }}
-          >
-            Go
-          </button>
+          <div className="link-row">
+            <input
+              placeholder="…or paste the transfer link"
+              aria-label="Transfer link"
+              value={manual}
+              onChange={(e) => setManual(e.target.value)}
+            />
+            <button
+              className="btn"
+              disabled={!sessionFrom(manual)}
+              onClick={() => {
+                const id = sessionFrom(manual);
+                if (id) router.push(`/r/${id}`);
+              }}
+            >
+              Go
+            </button>
+          </div>
         </div>
 
         <p className="footnote">
