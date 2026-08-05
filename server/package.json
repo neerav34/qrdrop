@@ -1,0 +1,15 @@
+{
+  "name": "qrdrop-signal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Signaling server for QRDrop — relays SDP/ICE only, never file data.",
+  "main": "index.js",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  }
+}

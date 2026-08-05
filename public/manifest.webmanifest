@@ -1,0 +1,17 @@
+{
+  "name": "QRDrop",
+  "short_name": "QRDrop",
+  "description": "Send files device-to-device by scanning a QR code. No upload, no account.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070b14",
+  "theme_color": "#070b14",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

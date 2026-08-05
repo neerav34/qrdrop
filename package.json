@@ -1,0 +1,31 @@
+{
+  "name": "qrdrop",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p 3000",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "signal": "node server/index.js",
+    "dev:all": "concurrently -n web,signal -c cyan,magenta \"npm:dev\" \"npm:signal\"",
+    "test:signal": "node test/signal.test.mjs",
+    "test:e2e": "node test/e2e.test.mjs"
+  },
+  "dependencies": {
+    "html5-qrcode": "^2.3.8",
+    "next": "^15.1.6",
+    "qrcode.react": "^4.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "concurrently": "^9.1.2",
+    "puppeteer-core": "^24.43.1",
+    "typescript": "^5.7.3"
+  }
+}
