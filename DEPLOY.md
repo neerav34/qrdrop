@@ -47,8 +47,13 @@ bundle).
    ```
 
    Leave `ALLOWED_ORIGINS` out for now; you'll add it in Part 3 once you know
-   your Vercel URL. Don't set `PORT` — Render injects it, and the server reads
-   `process.env.PORT`.
+   your Vercel URL.
+
+   Render prefills `PORT=10000`, which is fine to leave — the server reads
+   `process.env.PORT`. Just make sure the value is digits only. A stray character
+   makes Node treat it as a socket path rather than a port, and the deploy hangs
+   on "No open ports detected"; the server now warns and falls back to 4000
+   rather than failing silently.
 
 5. **Create Web Service** and wait for the first build (a minute or two).
 6. When it's live, Render shows a URL like
@@ -157,6 +162,7 @@ the variable — it's compiled into the client bundle.
 
 | What you see | Cause | Fix |
 |---|---|---|
+| `No open ports detected, continuing to scan...` and the log says `listening on …:10000??` or similar | A stray character in the host's `PORT` variable. Node reads a non-numeric string as a Unix socket path, so it opens no TCP port at all | Delete the `PORT` variable (Render injects it) or retype it as digits only, then redeploy |
 | "Can't reach the signaling server" | Wrong `NEXT_PUBLIC_SIGNAL_URL`, or set after deploying | Fix it, then **redeploy** Vercel |
 | Stuck on "Waking up the connection server" for minutes | Render service failed to boot | Check Render → Logs |
 | Sender shows the QR, receiver says "expired or already finished" | The 10-minute code lapsed, or it was already used once | Codes are single-use by design — generate a new one |

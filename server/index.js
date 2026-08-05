@@ -16,7 +16,22 @@ const crypto = require("crypto");
 const express = require("express");
 const { Server } = require("socket.io");
 
-const PORT = process.env.PORT || 4000;
+// Coerce to a number deliberately: Node reads a non-numeric string as a Unix
+// socket path, so a stray character in the host's PORT variable would silently
+// open no TCP port at all and the platform would report "no open ports".
+const PORT = (() => {
+  const raw = process.env.PORT;
+  if (raw === undefined || raw === "") return 4000;
+  const n = Number(String(raw).trim());
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    console.warn(
+      `PORT="${raw}" is not a valid port number — falling back to 4000. ` +
+        `Check for stray characters in the environment variable.`,
+    );
+    return 4000;
+  }
+  return n;
+})();
 const WAITING_TTL_MS = 10 * 60 * 1000; // unscanned QR code lifetime
 const RESUME_GRACE_MS = 2 * 60 * 1000; // how long a half-dead transfer is held
 const MAX_LIFETIME_MS = 60 * 60 * 1000; // hard ceiling on any session
@@ -333,8 +348,9 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`QRDrop signaling on :${PORT}`);
+// Bind on all interfaces explicitly — containers route in from outside.
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`QRDrop signaling listening on 0.0.0.0:${PORT}`);
   console.log(
     ALLOWED.length
       ? `Allowed origins: ${ALLOWED.join(", ")}`
