@@ -27,13 +27,18 @@ Receiver scans it ────────────┘
 | Path | What it is |
 |---|---|
 | [app/](app/) | Pages: home, `/send`, `/receive` (camera scanner), `/r/[id]` (the scanned link) |
-| [lib/peer.ts](lib/peer.ts) | The transfer engine — signaling, WebRTC, chunking, backpressure, resume |
+| [lib/peer.ts](lib/peer.ts) | The transfer engine — signalling, WebRTC, chunking, backpressure, resume |
 | [lib/protocol.ts](lib/protocol.ts) | Shared message shapes and tuning constants for both sides |
-| [lib/sink.ts](lib/sink.ts) | Where received bytes go: memory blob, or streamed to disk for big files |
+| [lib/sink.ts](lib/sink.ts) | Where received bytes go: memory, one file on disk, or a whole folder |
+| [lib/pin.ts](lib/pin.ts) | PIN generation and salted digests, and why the attempt limit is the real control |
 | [lib/keepAwake.ts](lib/keepAwake.ts) | Screen wake lock held for the duration of a transfer |
+| [lib/device.ts](lib/device.ts) | Coarse device labelling, so each end can name the other |
+| [components/Receiver.tsx](components/Receiver.tsx) | The whole receive flow: PIN gate, file list, progress, saving |
 | [components/DeviceLink.tsx](components/DeviceLink.tsx) | The two-device visual — the live state of the link |
-| [server/](server/) | Socket.io signaling server — relays SDP/ICE only, mints TURN credentials, deployed separately |
-| [test/](test/) | Protocol tests + real-Chrome transfer and resume tests |
+| [public/sw.js](public/sw.js) | Service worker, deliberately narrow so it cannot serve a stale build |
+| [server/](server/) | Socket.io signalling — relays SDP/ICE, mints TURN credentials, holds no files |
+| [test/](test/) | 8 suites, 152 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: build plus every suite that needs no credentials |
 
 ## Run it locally
 
@@ -138,16 +143,18 @@ the seam would fail the test.
 
 ```bash
 npm run signal           # in one terminal
-npm run test:signal      # 28 protocol checks: session lifecycle, resume tokens,
-                         # single-use lock, validation, rate limit, peer-drop
+npm run test:signal      # 34 protocol checks: session lifecycle, resume tokens,
+                         # single-use lock, manifest validation, rate limit,
+                         # peer-drop notification
 
 npm run dev:all          # in one terminal
-npm run test:e2e         # drives two real Chrome tabs through four scenarios:
+npm run test:e2e         # drives two real Chrome tabs through five scenarios:
                          # a 3 MB transfer verified byte-for-byte; a 64 MB one
                          # whose link is cut mid-flight; four files in one
                          # session each checked by sha256; and a batch cut after
                          # the first file is banked, which must resume across the
-                         # file boundary without duplicating or losing a chunk
+                         # file boundary without duplicating or losing a chunk;
+                         # and a PIN-gated transfer through the real UI
 RESUME_RUNS=5 npm run test:e2e   # repeat the resume scenario to shake out races
 
 npm run build && npm run start   # production, in one terminal
@@ -180,7 +187,7 @@ E2E_URL=https://qrdrop-seven.vercel.app npm run test:relay
                          # spends relay quota, so it is opt-in.
 ```
 
-All suites pass on the current tree (34 signal + 22 PIN + 14 origins + 40 e2e + 4 cold-start + 16 TURN + 16 PWA + 6 relay against live). Leave a minute between
+All eight suites pass on the current tree — **152 checks** (34 signalling, 22 PIN, 14 origins, 16 TURN, 17 PWA, 35 browser transfers, 4 cold start, 6 live relay). The first six run in CI on every push. Leave a minute between
 them — the signal suite deliberately trips the 10-sessions-per-IP-per-minute
 limit, which would otherwise refuse the e2e run's own session. And don't run
 `next build` while `next dev` is live; they share `.next`.
@@ -326,6 +333,20 @@ Everything respects `prefers-reduced-motion`.
 
 ## Next up
 
-Password-protected sessions, multi-file/folder support via `jszip`, transfer
-history in `localStorage`, text/link sharing, and PWA install (needs 192/512 PNG
-icons and a service worker).
+Optional, and none of it changes what the tool does:
+
+- **Transfer history** — last few transfers in `localStorage` (names and sizes
+  only, never files).
+- **Text and link sharing** — paste a URL or a snippet instead of picking a file.
+- **Cross-network at scale.** Relay works but the free TURN allowance is 500 MB a
+  month, which suits demos rather than daily use. A paid tier or a self-hosted
+  `coturn` would lift it.
+- **Resume across a page reload.** Backgrounding is survivable today; a full
+  reload is not, because the received bytes live in memory or in a file handle
+  that does not outlive the page. IndexedDB or a re-picked directory handle would
+  close that.
+
+Deliberately *not* planned: zipping multiple files client-side (the original plan
+called for `jszip`). Streaming them sequentially avoids a 2 GB folder needing to
+exist twice before a byte moves, and gives the receiver their actual files rather
+than an archive to unpack.
