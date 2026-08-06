@@ -29,6 +29,17 @@ const check = (name, cond, extra = "") => {
 };
 
 const sha = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
+const skip = (name, why) => console.log(`  ~ ${name} — SKIPPED: ${why}`);
+
+/**
+ * The drop hook only exists in development builds, so resume scenarios cannot run
+ * against a production deployment. Saying so is the point: calling the missing
+ * hook is a silent no-op, and a scenario that reports success without having cut
+ * anything is worse than one that admits it was skipped.
+ */
+async function dropHookAvailable(page) {
+  return page.evaluate(() => typeof window.__qrdropDropLink === "function");
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function makePayload(name, size) {
@@ -187,6 +198,14 @@ try {
     const recv = await openReceiver(url, dl, "s2");
 
     await recv.waitForSelector(".btn.primary", { timeout: 20000 });
+    if (!(await dropHookAvailable(recv))) {
+      skip(
+        `scenario 2.${run}`,
+        "no drop hook in this build — resume needs a dev server (npm run dev)",
+      );
+      await Promise.all([send.close(), recv.close()]);
+      continue;
+    }
     await (await recv.$(".btn.primary")).click();
 
     // Kill the peer connection the way a sleeping phone would, partway through.
@@ -332,6 +351,13 @@ try {
     const { page: send, url } = await openSender(payloads.map((p) => p.file), "s4");
     const recv = await openReceiver(url, dl, "s4");
     await recv.waitForSelector(".btn.primary", { timeout: 20000 });
+    if (!(await dropHookAvailable(recv))) {
+      skip(
+        "scenario 4",
+        "no drop hook in this build — resume needs a dev server (npm run dev)",
+      );
+      await Promise.all([send.close(), recv.close()]);
+    } else {
     await (await recv.$(".btn.primary")).click();
 
     // Wait until we are into the *second* file, so the resume has to rewind to a
@@ -385,6 +411,7 @@ try {
     // If the seam duplicated or dropped a chunk, this is where it shows.
     check("every file still matches by sha256 after the resume", ok);
     await Promise.all([send.close(), recv.close()]);
+    }
   }
   // ================================= 5. the PIN gate, through the real UI
   log("\n▸ scenario 5 — PIN-protected transfer");

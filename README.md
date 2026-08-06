@@ -195,8 +195,10 @@ verified end to end:
 E2E_URL=https://qrdrop-seven.vercel.app RESUME_RUNS=0 npm run test:e2e
 ```
 
-`RESUME_RUNS=0` skips the resume scenario there, because the test hook it needs
-is stripped from production builds.
+The resume scenarios detect that the drop hook is absent from a production build
+and report themselves **skipped** rather than passing. That matters: calling the
+missing hook is a silent no-op, so without the check they would claim to have cut
+a link they never touched — a green tick proving nothing.
 
 In short — the signaling server goes to Render (a free Web Service, because it
 must hold WebSockets open, which Vercel's serverless functions cannot), the web
