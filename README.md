@@ -10,13 +10,14 @@ is the only runtime that exists everywhere, so Android → iPhone, laptop → ph
 and Windows → Mac all work the same way here.
 
 ```
-Sender picks a file ──► QR code appears (it holds a session link, not the file)
+Sender picks files ──► QR code appears (it holds a session link, not the files)
                               │
 Receiver scans it ────────────┘
                               │
         Both browsers hand each other an address via the signaling server
                               │
-        File streams device → device, 16 KB at a time, resuming if it drops
+        Files stream device → device, one after another, 16 KB at a time,
+        resuming from the exact file and byte if the link drops
 ```
 
 ## What's in here
@@ -50,6 +51,34 @@ WebRTC and the camera both require a secure context, and `http://192.168.x.x` is
 not one, so LAN testing over plain HTTP fails on the phone. Deploy first and test
 on the HTTPS URL — that is what the transfer is meant to run on anyway.
 
+## Several files at once
+
+Pick as many files as you like (up to 100) and they stream one after another down
+a single data channel. They are deliberately **not** zipped first: a 2 GB folder
+would then have to exist twice over before a byte moved, and the receiver would
+get an archive to unpack instead of their files.
+
+Each file is closed off and handed to the receiver's UI as it lands, so a long
+batch is useful while it is still running. Where the bytes go depends on the
+batch:
+
+| Batch | Where it lands |
+|---|---|
+| Anything under 256 MB | memory, then a normal download — nothing is asked |
+| One large file | a single save dialog |
+| Several large files | **one folder dialog**, then written straight into it |
+
+That last row is the reason [lib/sink.ts](lib/sink.ts) has a `SinkFactory` rather
+than just a sink: a save dialog per file would need a fresh user gesture for each
+one, and there isn't one mid-transfer. Asking once for a folder is the only shape
+that works. Filenames coming off the wire are sanitised before they become real
+paths ([`safeName`](lib/sink.ts)) — a sender could otherwise offer
+`../../something`.
+
+Browsers may block the second and later automatic downloads in a batch, so the
+file list always keeps an explicit Save link per file for anything the browser
+skipped.
+
 ## Surviving interruptions
 
 A phone that sleeps or switches apps kills the connection, so the transfer is
@@ -61,9 +90,11 @@ built to expect that rather than hope it doesn't happen:
   holds the session for two minutes after a peer vanishes and re-attaches the
   reconnected socket to it.
 - **The receiver drives resumption.** On every fresh data channel it announces
-  how many bytes it already holds, and the sender seeks there before sending.
-  A first connection and a resume are the same code path, which is why the seam
-  can't drift — the receiver's count is always authoritative.
+  which file it is on and how many of that file's bytes it holds, and the sender
+  seeks there before sending. A first connection and a resume are the same code
+  path, which is why the seam can't drift — the receiver's position is always
+  authoritative. Files already banked are never re-sent, so a drop during file 8
+  of 10 rewinds only file 8.
 - **Relinking is single-flight, with a watchdog.** Both sides notice a dead link
   at once, so every reason to reconnect is coalesced into one negotiation, and a
   connection attempt that doesn't complete in 10 seconds is retried on our
@@ -82,9 +113,12 @@ npm run test:signal      # 28 protocol checks: session lifecycle, resume tokens,
                          # single-use lock, validation, rate limit, peer-drop
 
 npm run dev:all          # in one terminal
-npm run test:e2e         # drives two real Chrome tabs: a 3 MB transfer verified
-                         # byte-for-byte, then a 64 MB transfer whose link is cut
-                         # mid-flight and must resume and still match by sha256
+npm run test:e2e         # drives two real Chrome tabs through four scenarios:
+                         # a 3 MB transfer verified byte-for-byte; a 64 MB one
+                         # whose link is cut mid-flight; four files in one
+                         # session each checked by sha256; and a batch cut after
+                         # the first file is banked, which must resume across the
+                         # file boundary without duplicating or losing a chunk
 RESUME_RUNS=5 npm run test:e2e   # repeat the resume scenario to shake out races
 
 npm run build && npm run start   # production, in one terminal
@@ -112,7 +146,7 @@ E2E_URL=https://qrdrop-seven.vercel.app npm run test:relay
                          # spends relay quota, so it is opt-in.
 ```
 
-All suites pass on the current tree (28 signal + 14 origins + 18 e2e + 4 cold-start + 16 TURN + 16 PWA + 6 relay against live). Leave a minute between
+All suites pass on the current tree (34 signal + 14 origins + 30 e2e + 4 cold-start + 16 TURN + 16 PWA + 6 relay against live). Leave a minute between
 them — the signal suite deliberately trips the 10-sessions-per-IP-per-minute
 limit, which would otherwise refuse the e2e run's own session. And don't run
 `next build` while `next dev` is live; they share `.next`.

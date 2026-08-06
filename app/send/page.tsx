@@ -34,12 +34,18 @@ const LINK_STATE: Record<SenderStatus, LinkState> = {
 };
 
 export default function SendPage() {
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[] | null>(null);
   const [status, setStatus] = useState<SenderStatus>("connecting");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState(0);
   const [left, setLeft] = useState(0);
-  const [progress, setProgress] = useState<Progress>({ moved: 0, total: 0, bps: 0 });
+  const [progress, setProgress] = useState<Progress>({
+    moved: 0,
+    total: 0,
+    bps: 0,
+    index: 0,
+    fileCount: 0,
+  });
   const [peer, setPeer] = useState<DeviceInfo | null>(null);
   const [path, setPath] = useState<LinkPath | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -83,12 +89,19 @@ export default function SendPage() {
     }
   }, [status, elapsed]);
 
-  const begin = useCallback((f: File) => {
+  const begin = useCallback((picked: File[]) => {
+    if (!picked.length) return;
     setError(null);
     setNotice(null);
-    setFile(f);
-    setProgress({ moved: 0, total: f.size, bps: 0 });
-    handle.current = startSender(f, {
+    setFiles(picked);
+    setProgress({
+      moved: 0,
+      total: picked.reduce((n, f) => n + f.size, 0),
+      bps: 0,
+      index: 0,
+      fileCount: picked.length,
+    });
+    handle.current = startSender(picked, {
       onSession: (id, exp) => {
         setSessionId(id);
         setExpiresAt(exp);
@@ -107,11 +120,11 @@ export default function SendPage() {
     handle.current?.close();
     handle.current = null;
     startedAt.current = 0;
-    setFile(null);
+    setFiles(null);
     setSessionId(null);
     setExpiresAt(0);
     setStatus("connecting");
-    setProgress({ moved: 0, total: 0, bps: 0 });
+    setProgress({ moved: 0, total: 0, bps: 0, index: 0, fileCount: 0 });
     setPeer(null);
     setPath(null);
     setNotice(null);
@@ -119,6 +132,7 @@ export default function SendPage() {
     setElapsed(null);
   }
 
+  const totalSize = files ? files.reduce((n, f) => n + f.size, 0) : 0;
   const shareUrl =
     sessionId && origin
       ? `${origin}/r/${sessionId}${forceRelay ? "?relay=1" : ""}`
@@ -138,7 +152,7 @@ export default function SendPage() {
   );
 
   // ---------------------------------------------------------------- picker
-  if (!file) {
+  if (!files) {
     return (
       <main className="shell">
         <div className="panel">
@@ -147,7 +161,7 @@ export default function SendPage() {
               ← Back
             </Link>
           </div>
-          <h2>Pick a file to send</h2>
+          <h2>Pick files to send</h2>
           <div
             className={dragging ? "drop over" : "drop"}
             onClick={() => input.current?.click()}
@@ -159,8 +173,7 @@ export default function SendPage() {
             onDrop={(e) => {
               e.preventDefault();
               setDragging(false);
-              const f = e.dataTransfer.files?.[0];
-              if (f) begin(f);
+              begin(Array.from(e.dataTransfer.files || []));
             }}
             role="button"
             tabIndex={0}
@@ -168,21 +181,20 @@ export default function SendPage() {
               if (e.key === "Enter" || e.key === " ") input.current?.click();
             }}
           >
-            <strong>Choose a file</strong>
-            or drop one here
+            <strong>Choose files</strong>
+            or drop them here
           </div>
           <input
             ref={input}
             type="file"
+            multiple
             hidden
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) begin(f);
-            }}
+            onChange={(e) => begin(Array.from(e.target.files || []))}
           />
           <p className="footnote">
-            Any file type, any size. Both devices stay on the page until the
-            transfer finishes — if one drops out, it picks up where it stopped.
+            Any file type, any size, as many as you like. Both devices stay on
+            the page until the transfer finishes — if one drops out, it picks up
+            from the file and byte it stopped at.
           </p>
         </div>
       </main>
@@ -208,13 +220,21 @@ export default function SendPage() {
           />
 
           <div className="file-line">
-            <div className="file-name">{file.name}</div>
+            <div className="file-name">
+              {files.length === 1
+                ? files[0].name
+                : status === "sending"
+                  ? files[progress.index]?.name ?? `${files.length} files`
+                  : `${files.length} files`}
+            </div>
             <div className="file-size">
               {status === "done"
-                ? `${bytes(file.size)} delivered${
+                ? `${bytes(totalSize)} delivered${
                     elapsed !== null ? ` in ${elapsed.toFixed(1)}s` : ""
                   }`
-                : bytes(file.size)}
+                : status === "sending" && files.length > 1
+                  ? `file ${progress.index + 1} of ${files.length} · ${bytes(totalSize)} total`
+                  : bytes(totalSize)}
             </div>
           </div>
 
@@ -314,7 +334,7 @@ export default function SendPage() {
               Only show this code to the person you are sending to — whoever scans
               it first gets the file. Or paste the link into a chat.
             </p>
-            {file.size > MEMORY_WARN_THRESHOLD && (
+            {totalSize > MEMORY_WARN_THRESHOLD && (
               <div className="notice warn">
                 <span className="notice-dot" />
                 This file is over {bytes(MEMORY_WARN_THRESHOLD)}. Files above{" "}

@@ -33,14 +33,14 @@ const phone = { kind: "phone", label: "iPhone" };
 
 // ---------------------------------------------- happy path + device labels
 const sender = await connect();
-const created = await emit(sender, "create", { file, device: laptop });
+const created = await emit(sender, "create", { files: [file], device: laptop });
 ok("create returns uuid", /^[0-9a-f-]{36}$/.test(created.sessionId || ""), JSON.stringify(created));
 ok("create returns a resume token", /^[0-9a-f-]{36}$/.test(created.token || ""));
 ok("create returns expiry ~10min", created.expiresAt - Date.now() > 590000);
 
 const receiver = await connect();
 const joined = await emit(receiver, "join", created.sessionId);
-ok("join returns file meta", joined.file?.name === "report.pdf", JSON.stringify(joined.file));
+ok("join returns the file manifest", joined.files?.[0]?.name === "report.pdf", JSON.stringify(joined.files));
 ok("join reveals the sender's device", joined.peerDevice?.label === "Mac", JSON.stringify(joined.peerDevice));
 
 const readyP = waitFor(sender, "receiver-ready");
@@ -75,13 +75,41 @@ ok(
 );
 ok(
   "invalid meta rejected",
-  !!(await emit(intruder, "create", { file: { name: "", size: -1, type: 5 } })).error,
+  !!(await emit(intruder, "create", { files: [{ name: "", size: -1, type: 5 }] })).error,
 );
+ok(
+  "an empty file list is rejected",
+  !!(await emit(await connect(), "create", { files: [], device: laptop })).error,
+);
+ok(
+  "a non-array files field is rejected",
+  !!(await emit(await connect(), "create", { files: file, device: laptop })).error,
+);
+ok(
+  "too many files is rejected",
+  !!(
+    await emit(await connect(), "create", {
+      files: Array.from({ length: 101 }, (_, i) => ({ ...file, name: `f${i}.bin` })),
+      device: laptop,
+    })
+  ).error,
+);
+{
+  const many = Array.from({ length: 5 }, (_, i) => ({ ...file, name: `p${i}.jpg` }));
+  const multi = await emit(await connect(), "create", { files: many, device: laptop });
+  ok("a multi-file session is accepted", !!multi.sessionId, JSON.stringify(multi.error || "ok"));
+  const peek = await emit(await connect(), "join", multi.sessionId);
+  ok(
+    "the receiver sees all five files",
+    peek.files?.length === 5 && peek.files[4].name === "p4.jpg",
+    `${peek.files?.length} files`,
+  );
+}
 ok(
   "device label is sanitised",
   (
     await emit(await connect(), "create", {
-      file,
+      files: [file],
       device: { kind: "hax", label: "<script>alert(1)</script>".repeat(4) },
     })
   ).sessionId !== undefined,
@@ -109,7 +137,7 @@ const rejoined = await emit(returning, "rejoin", {
   role: "receiver",
 });
 ok("session survived the drop", !rejoined.error, JSON.stringify(rejoined));
-ok("rejoin returns the file meta", rejoined.file?.name === "report.pdf");
+ok("rejoin returns the manifest", rejoined.files?.[0]?.name === "report.pdf");
 ok("rejoin reports the peer is online", rejoined.peerOnline === true);
 ok("rejoin re-triggers renegotiation", !!(await reReadyP));
 
@@ -140,7 +168,8 @@ ok("session gone after completion", !!afterComplete.error);
 
 // ------------------------------------------------- unscanned session cleanup
 const lonely = await connect();
-const lonelySession = await emit(lonely, "create", { file, device: laptop });
+const lonelySession = await emit(lonely, "create", { files: [file], device: laptop });
+ok("the lonely session was actually created", !!lonelySession.sessionId, "else the next check is vacuous");
 lonely.disconnect();
 await new Promise((r) => setTimeout(r, 150));
 const gone = await emit(await connect(), "join", lonelySession.sessionId);
@@ -150,7 +179,7 @@ ok("never-accepted session dropped on disconnect", !!gone.error);
 let limitHitAt = null;
 for (let i = 0; i < 14; i++) {
   const c = await connect();
-  const r = await emit(c, "create", { file, device: laptop });
+  const r = await emit(c, "create", { files: [file], device: laptop });
   if (r.error && limitHitAt === null) limitHitAt = i;
   c.disconnect();
 }

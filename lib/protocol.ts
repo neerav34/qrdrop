@@ -30,16 +30,27 @@ export type SignalPayload =
   | { kind: "candidate"; candidate: RTCIceCandidateInit };
 
 /**
- * Data-channel control frames. Everything else on the wire is a binary chunk.
+ * Data-channel control frames. Everything else on the wire is a binary chunk,
+ * belonging to whichever file is currently in flight.
  *
- * The receiver drives resumption: on every fresh data channel it announces how
- * many bytes it already holds, and the sender seeks there before pumping. That
- * makes the first connection and a resume after a drop the same code path.
+ * The receiver drives resumption: on every fresh data channel it announces which
+ * file it is on and how many of that file's bytes it already holds, and the
+ * sender seeks there before pumping. That makes a first connection and a resume
+ * after a drop the same code path — the receiver's position is always
+ * authoritative, so the seam can't drift.
+ *
+ * Files are streamed one after another over a single channel rather than zipped
+ * up front, so a 2 GB folder never has to exist twice in memory and the receiver
+ * gets the original files back rather than an archive to unpack.
  */
 export type ControlFrame =
-  | { t: "resume"; from: number }
+  | { t: "resume"; index: number; from: number }
+  | { t: "file-end"; index: number }
   | { t: "eof" }
   | { t: "ack" };
+
+/** How many files one session may carry. */
+export const MAX_FILES = 100;
 
 export const CHUNK_SIZE = 16 * 1024;
 

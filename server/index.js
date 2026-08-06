@@ -38,6 +38,7 @@ const MAX_LIFETIME_MS = 60 * 60 * 1000; // hard ceiling on any session
 const SWEEP_MS = 15 * 1000;
 const MAX_SESSIONS_PER_IP_PER_MIN = 10;
 const MAX_NAME_LEN = 260;
+const MAX_FILES = 100; // keep in step with MAX_FILES in lib/protocol.ts
 const MAX_LABEL_LEN = 40;
 const MAX_SIZE_BYTES = 100 * 1024 * 1024 * 1024; // sanity bound on claimed size
 const MAX_SIGNAL_BYTES = 16 * 1024; // an SDP blob is a few KB at most
@@ -249,6 +250,7 @@ function rateLimited(ip) {
   return false;
 }
 
+/** One file's declared details. Nothing here is trusted for anything but display. */
 function validMeta(m) {
   return (
     m &&
@@ -355,8 +357,18 @@ io.on("connection", (socket) => {
     if (socketSession.has(socket.id)) {
       return ack({ error: "This connection already has a session." });
     }
-    const meta = payload && payload.file;
-    if (!validMeta(meta)) return ack({ error: "Invalid file details." });
+    const files = payload && payload.files;
+    if (!Array.isArray(files) || files.length === 0) {
+      return ack({ error: "No files offered." });
+    }
+    if (files.length > MAX_FILES) {
+      return ack({ error: `Too many files — the limit is ${MAX_FILES}.` });
+    }
+    if (!files.every(validMeta)) return ack({ error: "Invalid file details." });
+    const total = files.reduce((n, f) => n + f.size, 0);
+    if (!Number.isFinite(total) || total > MAX_SIZE_BYTES) {
+      return ack({ error: "Those files are too large." });
+    }
     if (rateLimited(ipOf(socket))) {
       return ack({ error: "Too many transfers started. Wait a minute." });
     }
@@ -367,7 +379,7 @@ io.on("connection", (socket) => {
     sessions.set(sessionId, {
       sessionId,
       createdAt,
-      file: { name: meta.name, size: meta.size, type: meta.type },
+      files: files.map((f) => ({ name: f.name, size: f.size, type: f.type })),
       sender: {
         socketId: socket.id,
         token,
@@ -401,7 +413,7 @@ io.on("connection", (socket) => {
     // Remember the peek so `accept` needn't take an id from the client again.
     socket.data.joined = sessionId;
     ack({
-      file: s.file,
+      files: s.files,
       peerDevice: s.sender.device,
       iceServers: await getIceServers(),
     });
@@ -453,7 +465,7 @@ io.on("connection", (socket) => {
     const peer = role === "sender" ? s.receiver : s.sender;
     const peerOnline = !!peer && !peer.offlineSince;
     ack({
-      file: s.file,
+      files: s.files,
       peerDevice: peer ? peer.device : null,
       peerOnline,
       iceServers: await getIceServers(),

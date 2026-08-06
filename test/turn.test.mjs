@@ -90,7 +90,7 @@ const connect = (port) => {
 };
 const emit = (s, ev, arg) => new Promise((res) => s.emit(ev, arg, res));
 
-const file = { name: "a.bin", size: 1024, type: "application/octet-stream" };
+const files = [{ name: "a.bin", size: 1024, type: "application/octet-stream" }];
 const device = { kind: "laptop", label: "Mac" };
 const flatUrls = (servers) =>
   (servers || []).flatMap((s) => (Array.isArray(s.urls) ? s.urls : [s.urls]));
@@ -112,7 +112,7 @@ await sleep(2200);
 try {
   // ---------------------------------------------- minted (Cloudflare-style)
   const sender = await connect(4301);
-  const created = await emit(sender, "create", { file, device });
+  const created = await emit(sender, "create", { files, device });
   const urls = flatUrls(created.iceServers);
   check(
     "sender is handed TURN servers with its session",
@@ -141,7 +141,7 @@ try {
   const before = mintCount;
   for (let i = 0; i < 3; i++) {
     const s = await connect(4301);
-    await emit(s, "create", { file, device });
+    await emit(s, "create", { files, device });
     s.disconnect();
   }
   check(
@@ -155,7 +155,7 @@ try {
 
   // ------------------------------------------------------ static (any provider)
   const s2 = await connect(4302);
-  const created2 = await emit(s2, "create", { file, device });
+  const created2 = await emit(s2, "create", { files, device });
   const urls2 = flatUrls(created2.iceServers);
   check(
     "static TURN_URLS are served as-is",
@@ -171,7 +171,7 @@ try {
 
   // -------------------------------------------------------- no TURN configured
   const s3 = await connect(4303);
-  const created3 = await emit(s3, "create", { file, device });
+  const created3 = await emit(s3, "create", { files, device });
   const urls3 = flatUrls(created3.iceServers);
   check("without TURN configured, STUN is still provided", urls3.some((u) => u.startsWith("stun:")));
   check("and no TURN server is claimed", !urls3.some((u) => u.startsWith("turn")));
@@ -186,7 +186,7 @@ try {
   });
   await sleep(1800);
   const s4 = await connect(4304);
-  const created4 = await emit(s4, "create", { file, device });
+  const created4 = await emit(s4, "create", { files, device });
   check(
     "a provider outage still yields a usable session",
     !!created4.sessionId,

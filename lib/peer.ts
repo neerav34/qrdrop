@@ -4,10 +4,13 @@ import { io, type Socket } from "socket.io-client";
 import { describeDevice } from "./device";
 import { keepAwake, type KeepAwake } from "./keepAwake";
 import {
-  createDiskSink,
-  createMemorySink,
+  directoryFactory,
+  directoryPickerAvailable,
   diskStreamingAvailable,
+  memoryFactory,
+  singleFileFactory,
   type Sink,
+  type SinkFactory,
 } from "./sink";
 import {
   BUFFER_HIGH,
@@ -26,7 +29,17 @@ import {
   type SignalPayload,
 } from "./protocol";
 
-export type Progress = { moved: number; total: number; bps: number };
+/**
+ * Overall position across the whole batch, plus which file is in flight, so the
+ * UI can show both "43% of 12 files" and the current filename.
+ */
+export type Progress = {
+  moved: number;
+  total: number;
+  bps: number;
+  index: number;
+  fileCount: number;
+};
 
 /** Reconnection is on by default, but be explicit: resume depends on it. */
 function socketOptions() {
@@ -178,15 +191,20 @@ export type LinkOptions = {
 };
 
 export function startSender(
-  file: File,
+  files: File[],
   cb: SenderCallbacks,
   opts: LinkOptions = {},
 ): SenderHandle {
-  const meta: FileMeta = {
-    name: file.name,
-    size: file.size,
-    type: file.type || "application/octet-stream",
-  };
+  const metas: FileMeta[] = files.map((f) => ({
+    name: f.name,
+    size: f.size,
+    type: f.type || "application/octet-stream",
+  }));
+  const totalSize = metas.reduce((n, m) => n + m.size, 0);
+  /** Bytes in every file before this one, for reporting batch-wide progress. */
+  const offsetOf = metas.map((_, i) =>
+    metas.slice(0, i).reduce((n, m) => n + m.size, 0),
+  );
   const socket: Socket = io(SIGNAL_URL, socketOptions());
 
   let sessionId: string | null = null;
@@ -335,7 +353,9 @@ export function startSender(
       }
       // The receiver tells us where it got to; that's our seek point.
       if (frame.t === "resume") {
-        void pump(ch, Math.min(Math.max(0, frame.from), file.size), myGen);
+        const index = Math.min(Math.max(0, frame.index | 0), files.length - 1);
+        const from = Math.min(Math.max(0, frame.from), files[index].size);
+        void pump(ch, index, from, myGen);
       } else if (frame.t === "ack") {
         finished = true;
         if (deadline) clearTimeout(deadline);
@@ -361,41 +381,69 @@ export function startSender(
     }
   }
 
-  async function pump(ch: RTCDataChannel, from: number, myGen: number) {
+  /**
+   * Streams files from `startIndex` onwards, beginning that first file at `from`.
+   * Every later file starts at zero, so a resume only ever rewinds the file that
+   * was actually interrupted.
+   */
+  async function pump(
+    ch: RTCDataChannel,
+    startIndex: number,
+    from: number,
+    myGen: number,
+  ) {
     resumedOk();
     cb.onStatus("sending");
     if (!awake) awake = keepAwake();
 
     const meter = makeRateMeter();
     const gate = makeProgressGate();
-    let offset = from;
-    cb.onProgress({ moved: offset, total: file.size, bps: 0 });
 
-    while (offset < file.size) {
-      if (gen !== myGen || closed || finished || ch.readyState !== "open") return;
-      if (ch.bufferedAmount > BUFFER_HIGH) {
-        await waitForDrain(ch);
-        continue;
+    for (let index = startIndex; index < files.length; index++) {
+      const file = files[index];
+      let offset = index === startIndex ? from : 0;
+      const report = (force: boolean) => {
+        const moved = offsetOf[index] + offset;
+        const now = performance.now();
+        const bps = meter(moved, now);
+        if (gate(now, force)) {
+          cb.onProgress({
+            moved,
+            total: totalSize,
+            bps,
+            index,
+            fileCount: files.length,
+          });
+        }
+      };
+      report(true);
+
+      while (offset < file.size) {
+        if (gen !== myGen || closed || finished || ch.readyState !== "open") return;
+        if (ch.bufferedAmount > BUFFER_HIGH) {
+          await waitForDrain(ch);
+          continue;
+        }
+        let buf: ArrayBuffer;
+        try {
+          buf = await file.slice(offset, offset + CHUNK_SIZE).arrayBuffer();
+        } catch {
+          fatal(`Could not read "${file.name}". Was it moved or deleted?`);
+          return;
+        }
+        if (gen !== myGen || ch.readyState !== "open") return;
+        try {
+          ch.send(buf);
+        } catch {
+          return; // channel went away mid-send; the relink path handles it
+        }
+        offset += buf.byteLength;
+        report(offset >= file.size);
       }
-      let buf: ArrayBuffer;
-      try {
-        buf = await file.slice(offset, offset + CHUNK_SIZE).arrayBuffer();
-      } catch {
-        fatal("Could not read the file. Was it moved or deleted?");
-        return;
-      }
+
       if (gen !== myGen || ch.readyState !== "open") return;
-      try {
-        ch.send(buf);
-      } catch {
-        return; // channel went away mid-send; the relink path handles it
-      }
-      offset += buf.byteLength;
-      const now = performance.now();
-      const bps = meter(offset, now);
-      if (gate(now, offset >= file.size)) {
-        cb.onProgress({ moved: offset, total: file.size, bps });
-      }
+      // Tells the receiver to close that file off and expect the next one.
+      ch.send(JSON.stringify({ t: "file-end", index } satisfies ControlFrame));
     }
 
     if (gen === myGen && ch.readyState === "open") {
@@ -430,7 +478,7 @@ export function startSender(
     }
     socket.emit(
       "create",
-      { file: meta, device: describeDevice() },
+      { files: metas, device: describeDevice() },
       (res: {
         sessionId?: string;
         token?: string;
@@ -531,15 +579,24 @@ export type ReceiverHandle = {
   close: () => void;
 };
 
+export type ReceivedFile = {
+  meta: FileMeta;
+  index: number;
+  /** null when the bytes went straight to disk and there is nothing to download. */
+  blob: Blob | null;
+};
+
 export type ReceiverCallbacks = {
-  onMeta: (meta: FileMeta) => void;
+  onManifest: (files: FileMeta[]) => void;
   onStatus: (s: ReceiverStatus) => void;
   onProgress: (p: Progress) => void;
   onPeer: (device: DeviceInfo | null) => void;
-  /** "disk" means it is being written straight to a file the user chose. */
-  onTarget: (target: "disk" | "memory") => void;
-  /** blob is null when the bytes already went to disk. */
-  onDone: (blob: Blob | null, meta: FileMeta) => void;
+  /** "disk" means bytes are being written straight where the user chose. */
+  onTarget: (target: "disk" | "memory", location: string | null) => void;
+  /** Fires as each file completes, not just at the end of the batch. */
+  onFile: (file: ReceivedFile) => void;
+  /** Every file has arrived. */
+  onDone: () => void;
   onNotice: (msg: string | null) => void;
   onError: (msg: string) => void;
 };
@@ -553,9 +610,15 @@ export function startReceiver(
 
   let token: string | null = null;
   let iceServers: RTCIceServer[] = ICE_SERVERS;
-  let meta: FileMeta | null = null;
+  let manifest: FileMeta[] | null = null;
+  let totalSize = 0;
+  let factory: SinkFactory | null = null;
   let sink: Sink | null = null;
+  /** Index of the file currently arriving, and how many of its bytes we hold. */
+  let index = 0;
   let received = 0;
+  /** Bytes fully banked in earlier files, so progress is batch-wide. */
+  let banked = 0;
   let pc: RTCPeerConnection | null = null;
   const gate = makeProgressGate();
   let gen = 0;
@@ -702,7 +765,9 @@ export function startReceiver(
       cb.onStatus("receiving");
       if (!awake) awake = keepAwake();
       // Tell the sender where to seek to. On a first connection this is 0.
-      ch.send(JSON.stringify({ t: "resume", from: received } satisfies ControlFrame));
+      ch.send(
+        JSON.stringify({ t: "resume", index, from: received } satisfies ControlFrame),
+      );
     };
 
     if (ch.readyState === "open") announce();
@@ -717,17 +782,25 @@ export function startReceiver(
         } catch {
           return;
         }
-        if (frame.t === "eof") void finalize(ch);
+        if (frame.t === "file-end") void closeCurrentFile(frame.index);
+        else if (frame.t === "eof") void finalize(ch);
         return;
       }
       const buf: ArrayBuffer =
         e.data instanceof ArrayBuffer ? e.data : new Uint8Array(e.data).buffer;
       sink?.write(buf);
       received += buf.byteLength;
+      const moved = banked + received;
       const now = performance.now();
-      const bps = meter(received, now);
-      if (gate(now, received >= (meta?.size ?? 0))) {
-        cb.onProgress({ moved: received, total: meta?.size ?? 0, bps });
+      const bps = meter(moved, now);
+      if (gate(now, moved >= totalSize)) {
+        cb.onProgress({
+          moved,
+          total: totalSize,
+          bps,
+          index,
+          fileCount: manifest?.length ?? 1,
+        });
       }
     };
 
@@ -738,26 +811,50 @@ export function startReceiver(
     };
   }
 
+  /**
+   * A file has arrived in full: flush it, hand it to the UI, and move the cursor
+   * on. The sender is told nothing in reply — the next `resume` after any drop
+   * carries the new position, so this is the only place the cursor advances.
+   */
+  async function closeCurrentFile(reportedIndex: number) {
+    if (finished || closed || !sink || !manifest) return;
+    // Ignore a duplicate file-end for something already banked.
+    if (reportedIndex !== index) return;
+    const meta = manifest[index];
+    try {
+      await sink.drain();
+      const blob = await sink.finish();
+      cb.onFile({ meta, index, blob });
+    } catch {
+      fatal(`Could not save "${meta.name}".`);
+      return;
+    }
+    banked += meta.size;
+    received = 0;
+    index += 1;
+    sink = null;
+    if (index < manifest.length) {
+      try {
+        sink = await factory!.open(manifest[index]);
+      } catch {
+        fatal(`Could not start writing "${manifest[index].name}".`);
+      }
+    }
+  }
+
   async function finalize(ch: RTCDataChannel) {
-    if (finished || closed || !meta || !sink) return;
+    if (finished || closed || !manifest) return;
     finished = true;
     stopNudging();
     if (deadline) clearTimeout(deadline);
-    try {
-      await sink.drain();
-      if (ch.readyState === "open") {
-        ch.send(JSON.stringify({ t: "ack" } satisfies ControlFrame));
-      }
-      const blob = await sink.finish();
-      releaseAwake();
-      cb.onNotice(null);
-      cb.onStatus("done");
-      cb.onDone(blob, meta);
-      socket.emit("complete");
-    } catch {
-      finished = false;
-      fatal("Could not save the file to disk.");
+    if (ch.readyState === "open") {
+      ch.send(JSON.stringify({ t: "ack" } satisfies ControlFrame));
     }
+    releaseAwake();
+    cb.onNotice(null);
+    cb.onStatus("done");
+    cb.onDone();
+    socket.emit("complete");
   }
 
   socket.on("connect", () => {
@@ -770,7 +867,7 @@ export function startReceiver(
         (res: {
           error?: string;
           peerDevice?: DeviceInfo;
-          file?: FileMeta;
+          files?: FileMeta[];
           iceServers?: RTCIceServer[];
         }) => {
           if (res.error) return fatal(res.error);
@@ -785,17 +882,18 @@ export function startReceiver(
       "join",
       sessionId,
       (res: {
-        file?: FileMeta;
+        files?: FileMeta[];
         peerDevice?: DeviceInfo;
         error?: string;
         iceServers?: RTCIceServer[];
       }) => {
-        if (res.error || !res.file) {
+        if (res.error || !res.files?.length) {
           return fatal(res.error || "That transfer is no longer available.");
         }
         if (res.iceServers?.length) iceServers = res.iceServers;
-        meta = res.file;
-        cb.onMeta(res.file);
+        manifest = res.files;
+        totalSize = res.files.reduce((n, f) => n + f.size, 0);
+        cb.onManifest(res.files);
         cb.onPeer(res.peerDevice ?? null);
         cb.onStatus("offered");
       },
@@ -803,7 +901,7 @@ export function startReceiver(
   });
 
   socket.on("connect_error", () => {
-    if (meta) {
+    if (manifest) {
       pause("Lost the connection. Reconnecting…");
       return;
     }
@@ -855,23 +953,53 @@ export function startReceiver(
 
   return {
     async accept() {
-      if (!meta) return;
+      if (!manifest) return;
       cb.onNotice(null);
 
-      // Big files stream to disk so RAM isn't the ceiling. The picker needs the
-      // user activation from this very click, so it has to happen here.
-      if (meta.size >= DISK_STREAM_THRESHOLD && diskStreamingAvailable()) {
-        try {
-          sink = await createDiskSink(meta.name);
-        } catch {
-          cb.onStatus("offered");
-          cb.onError("Choose where to save the file, then accept again.");
-          return;
+      /*
+       * Big transfers go straight to disk so RAM isn't the ceiling. Any picker
+       * needs the user activation from this very click, which is why the choice
+       * happens here and not when the first byte arrives:
+       *
+       *  - several files, big     -> ask once for a folder. A save dialog per
+       *                              file would need a gesture per file, and
+       *                              there isn't one mid-transfer.
+       *  - one file, big          -> a single save dialog.
+       *  - anything small         -> memory, so nothing is asked at all for a
+       *                              transfer that lands in two seconds.
+       */
+      const big = totalSize >= DISK_STREAM_THRESHOLD;
+      try {
+        if (big && manifest.length > 1 && directoryPickerAvailable()) {
+          factory = await directoryFactory();
+        } else if (big && manifest.length === 1 && diskStreamingAvailable()) {
+          factory = await singleFileFactory(manifest[0].name);
+        } else {
+          factory = memoryFactory();
         }
-      } else {
-        sink = createMemorySink(meta.type);
+      } catch {
+        // The user dismissed the picker. Let them retry rather than silently
+        // falling back to memory, which is what they were avoiding.
+        cb.onStatus("offered");
+        cb.onError(
+          manifest.length > 1
+            ? "Choose a folder to save into, then accept again."
+            : "Choose where to save the file, then accept again.",
+        );
+        return;
       }
-      cb.onTarget(sink.toDisk ? "disk" : "memory");
+
+      try {
+        sink = await factory.open(manifest[0]);
+      } catch {
+        cb.onStatus("offered");
+        cb.onError("Could not start writing. Try accepting again.");
+        return;
+      }
+      index = 0;
+      received = 0;
+      banked = 0;
+      cb.onTarget(factory.toDisk ? "disk" : "memory", factory.location);
       cb.onStatus("linking");
 
       socket.emit(

@@ -67,7 +67,8 @@ const browser = await puppeteer.launch({
 });
 
 /** Opens the sender, picks the file, and returns the share URL. */
-async function openSender(payloadPath, tag) {
+async function openSender(payloadPaths, tag) {
+  const paths = Array.isArray(payloadPaths) ? payloadPaths : [payloadPaths];
   const page = await browser.newPage();
   page.on("pageerror", (e) => log(`  [${tag} sender pageerror]`, e.message));
   page.on("console", (m) => {
@@ -75,7 +76,7 @@ async function openSender(payloadPath, tag) {
   });
   await page.goto(`${BASE}/send`, { waitUntil: "networkidle2" });
   const input = await page.waitForSelector("input[type=file]");
-  await input.uploadFile(payloadPath);
+  await input.uploadFile(...paths);
 
   // Surface a server-side refusal (e.g. the per-IP rate limit, if the signal
   // suite just ran) instead of letting it look like a mystery timeout.
@@ -249,6 +250,138 @@ try {
     }
     await Promise.all([send.close(), recv.close()]);
   }
+  }
+  // ==================================== 3. several files in one session
+  log("\n▸ scenario 3 — 4 files in one session, each verified");
+  {
+    const payloads = [
+      makePayload("one.bin", 300 * 1024 + 11),
+      makePayload("two.bin", 900 * 1024 + 7),
+      makePayload("three.bin", 64 * 1024 + 3),
+      makePayload("four.bin", 1200 * 1024 + 5),
+    ];
+    const dl = path.join(WORK, "dl3");
+    const { page: send, url } = await openSender(payloads.map((p) => p.file), "s3");
+    const recv = await openReceiver(url, dl, "s3");
+
+    await recv.waitForSelector(".filelist li", { timeout: 20000 });
+    const listed = await recv.$$eval(".filelist-name", (els) =>
+      els.map((e) => e.textContent),
+    );
+    check(
+      "the receiver lists every file before accepting",
+      listed.length === 4 && listed.includes("three.bin"),
+      listed.join(", "),
+    );
+    const headline = await recv.$eval(".file-size", (el) => el.textContent);
+    check("it shows the batch total, not one file", /2\.4 MB|2\.3 MB/.test(headline), headline);
+
+    await (await recv.$(".btn.primary")).click();
+    await recv.waitForFunction(
+      () => document.querySelectorAll('.filelist li[data-state="done"]').length === 4,
+      { timeout: 120000 },
+    );
+    check("all four files complete", true);
+
+    await send.waitForFunction(() => document.body.innerText.includes("delivered"), {
+      timeout: 30000,
+    });
+
+    // Chrome may block the 2nd+ automatic download, so click the Save links the
+    // UI keeps for exactly that reason.
+    const links = await recv.$$(".filelist-save");
+    for (const link of links) await link.click().catch(() => {});
+    await sleep(1200);
+
+    const arrived = fs.readdirSync(dl).filter((f) => !f.endsWith(".crdownload"));
+    check(
+      "every file lands on disk",
+      payloads.every((p) => arrived.includes(path.basename(p.file))),
+      arrived.join(", "),
+    );
+    let allMatch = true;
+    for (const p of payloads) {
+      const name = path.basename(p.file);
+      const got = path.join(dl, name);
+      if (!fs.existsSync(got)) {
+        allMatch = false;
+        continue;
+      }
+      const buf = fs.readFileSync(got);
+      if (buf.length !== p.size || sha(buf) !== p.hash) {
+        allMatch = false;
+        log(`      ${name}: ${buf.length} vs ${p.size}, hash ${sha(buf) === p.hash}`);
+      }
+    }
+    check("each file matches its source by sha256", allMatch);
+    await Promise.all([send.close(), recv.close()]);
+  }
+
+  // ============== 4. a drop mid-batch must not lose or repeat a file
+  log("\n▸ scenario 4 — link cut mid-batch, resume across the file boundary");
+  {
+    const payloads = [
+      makePayload("a.bin", 8 * 1024 * 1024),
+      makePayload("b.bin", 24 * 1024 * 1024 + 13),
+      makePayload("c.bin", 8 * 1024 * 1024 + 1),
+    ];
+    const dl = path.join(WORK, "dl4");
+    const { page: send, url } = await openSender(payloads.map((p) => p.file), "s4");
+    const recv = await openReceiver(url, dl, "s4");
+    await recv.waitForSelector(".btn.primary", { timeout: 20000 });
+    await (await recv.$(".btn.primary")).click();
+
+    // Wait until we are into the *second* file, so the resume has to rewind to a
+    // partially received file with earlier ones already banked.
+    let cutAt = null;
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      const state = await recv.evaluate(() => ({
+        done: document.querySelectorAll('.filelist li[data-state="done"]').length,
+        pct: parseInt(document.querySelector(".pct")?.textContent ?? "0", 10),
+      }));
+      if (state.done >= 1 && state.pct > 30) {
+        cutAt = state;
+        await recv.evaluate(() => window.__qrdropDropLink?.());
+        break;
+      }
+      if (await recv.$("a.btn.primary")) break;
+      await sleep(25);
+    }
+    check(
+      "cut the link after the first file was banked",
+      cutAt !== null,
+      cutAt ? `${cutAt.done} done, ${cutAt.pct}% overall` : "finished too fast",
+    );
+
+    await recv.waitForFunction(
+      () => document.querySelectorAll('.filelist li[data-state="done"]').length === 3,
+      { timeout: 180000 },
+    );
+    check("the batch resumes and finishes", true);
+
+    for (const link of await recv.$$(".filelist-save")) {
+      await link.click().catch(() => {});
+    }
+    await sleep(1500);
+
+    let ok = true;
+    for (const p of payloads) {
+      const got = path.join(dl, path.basename(p.file));
+      if (!fs.existsSync(got)) {
+        ok = false;
+        log(`      missing ${path.basename(p.file)}`);
+        continue;
+      }
+      const buf = fs.readFileSync(got);
+      if (buf.length !== p.size || sha(buf) !== p.hash) {
+        ok = false;
+        log(`      ${path.basename(p.file)} corrupt: ${buf.length} vs ${p.size}`);
+      }
+    }
+    // If the seam duplicated or dropped a chunk, this is where it shows.
+    check("every file still matches by sha256 after the resume", ok);
+    await Promise.all([send.close(), recv.close()]);
   }
 } catch (e) {
   failed = true;

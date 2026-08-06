@@ -802,6 +802,66 @@ a {
   color: var(--text);
 }
 
+/* ======================================================== file list */
+
+.filelist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 190px;
+  overflow-y: auto;
+  text-align: left;
+  font-size: 13px;
+}
+.filelist li {
+  display: grid;
+  grid-template-columns: 18px 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  transition: background 0.2s var(--ease), color 0.2s var(--ease);
+}
+.filelist li[data-state="active"] {
+  background: var(--accent-wash);
+  color: var(--text);
+}
+.filelist li[data-state="done"] {
+  color: var(--text);
+}
+.filelist-mark {
+  display: grid;
+  place-items: center;
+  color: var(--ok);
+}
+.filelist-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filelist-size {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.filelist-save {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+.filelist-save:hover {
+  border-color: var(--accent);
+}
+
 /* ========================================================== notices */
 
 .notice {
