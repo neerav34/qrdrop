@@ -199,6 +199,27 @@ The server mints a credential, caches it, and refreshes at 80% of its lifetime.
   paths keep working, which is the majority case. Also covered by that suite.
 - Check `/healthz`: it reports `"turn":"cloudflare"`, `"static"` or `"none"`.
 
+### Proving the relay actually works
+
+You cannot test a relay from one network — the direct path always wins, so TURN
+stays untested until the day it is the only option. Append `?relay=1` to force
+it, on both ends (the share link carries the flag through automatically):
+
+```
+https://qrdrop-seven.vercel.app/send?relay=1
+```
+
+The sender will say `Relayed connection` instead of `Direct`, and the UI shows a
+warning while the flag is active, because relay traffic spends quota that an
+ordinary transfer does not. Automated version:
+
+```bash
+E2E_URL=https://qrdrop-seven.vercel.app npm run test:relay
+```
+
+Verified working against Metered's Global relay: a 512 KB transfer completed with
+`Relayed connection` and a matching sha256.
+
 ---
 
 ## The one real cost of free hosting

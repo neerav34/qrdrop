@@ -52,10 +52,11 @@ const browser = await puppeteer.launch({
 
 try {
   const send = await browser.newPage();
+  send.on("pageerror", (e) => console.log("  [sender pageerror]", e.message));
   send.on("console", (m) => {
     if (m.type() === "error") console.log("  [sender]", m.text());
   });
-  await send.goto(`${BASE}/send?relay=1`, { waitUntil: "domcontentloaded" });
+  await send.goto(`${BASE}/send?relay=1`, { waitUntil: "networkidle2" });
   await (await send.waitForSelector("input[type=file]")).uploadFile(src);
   await send.waitForSelector(".link-row input, .notice.bad", { timeout: 120000 });
 
@@ -73,7 +74,7 @@ try {
     downloadPath: dl,
     eventsEnabled: true,
   });
-  await recv.goto(url, { waitUntil: "domcontentloaded" });
+  await recv.goto(url, { waitUntil: "networkidle2" });
   await (await recv.waitForSelector(".btn.primary", { timeout: 60000 })).click();
 
   await recv.waitForFunction(

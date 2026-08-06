@@ -98,9 +98,16 @@ npm run test:turn        # TURN wiring against a stub provider: credentials
                          # delivered over the socket, minted once not per
                          # session, absent from the web bundle, and a provider
                          # outage degrading to STUN instead of breaking
+
+E2E_URL=https://qrdrop-seven.vercel.app npm run test:relay
+                         # forces iceTransportPolicy:"relay" via ?relay=1 and
+                         # sha256-checks the result — the only way to prove the
+                         # relay carries a file, since on one network the direct
+                         # path always wins. Needs real TURN credentials and
+                         # spends relay quota, so it is opt-in.
 ```
 
-All five suites pass on the current tree (28 signal + 14 origins + 18 e2e + 4 cold-start + 16 TURN). Leave a minute between
+All suites pass on the current tree (28 signal + 14 origins + 18 e2e + 4 cold-start + 16 TURN + 6 relay against live). Leave a minute between
 them — the signal suite deliberately trips the 10-sessions-per-IP-per-minute
 limit, which would otherwise refuse the e2e run's own session. And don't run
 `next build` while `next dev` is live; they share `.next`.
