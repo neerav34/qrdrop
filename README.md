@@ -1,5 +1,7 @@
 # QRDrop
 
+[![CI](https://github.com/neerav34/qrdrop/actions/workflows/ci.yml/badge.svg)](https://github.com/neerav34/qrdrop/actions/workflows/ci.yml)
+
 Send a file from one device to another by scanning a QR code. The file goes
 straight between the two browsers over an encrypted WebRTC data channel — no
 upload, no cloud storage, no account, and no server that can see the bytes.
@@ -182,6 +184,26 @@ All suites pass on the current tree (34 signal + 22 PIN + 14 origins + 40 e2e + 
 them — the signal suite deliberately trips the 10-sessions-per-IP-per-minute
 limit, which would otherwise refuse the e2e run's own session. And don't run
 `next build` while `next dev` is live; they share `.next`.
+
+## CI
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) runs on every push. Two jobs,
+split by what they need:
+
+- **Build + protocol suites** — `next build` (which is also the typecheck), then
+  the four suites that need neither a browser nor credentials. Fast, and the one
+  that should gate a merge. It boots the signaling server twice on separate ports
+  because the signal suite deliberately trips the per-IP rate limit, which would
+  otherwise leave the PIN suite refused for the following minute.
+- **Browser transfers + PWA** — real Chrome, real WebRTC. The PWA suite needs a
+  production server (the worker is not registered in dev) and the resume scenarios
+  need a dev one (only that build carries the hook that severs a live link), so
+  the job runs one then the other, killing the first and clearing `.next` in
+  between.
+
+This exists because of a real near-miss: a breaking protocol change (`files` where
+the server expected `file`) shipped to production with nothing but manual testing
+standing between it and a broken deployment.
 
 ## Deploy
 

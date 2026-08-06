@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push makes an in-flight run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Everything that needs neither a browser nor credentials. Fast, and the job
+  # that should gate a merge.
+  protocol:
+    name: Build + protocol suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+
+      - name: Install
+        run: |
+          npm ci
+          npm ci --prefix server
+
+      # Also the typecheck: `next build` fails on any type error.
+      - name: Build
+        run: npm run build
+
+      # Two servers on separate ports, because the signal suite deliberately
+      # trips the per-IP rate limit — sharing one process would leave the PIN
+      # suite refused for the following minute.
+      - name: Start signaling servers
+        run: |
+          PORT=4000 node server/index.js > /tmp/signal-4000.log 2>&1 &
+          PORT=4100 node server/index.js > /tmp/signal-4100.log 2>&1 &
+          for port in 4000 4100; do
+            for i in $(seq 1 30); do
+              curl -sf "http://localhost:$port/healthz" > /dev/null && break
+              sleep 1
+            done
+            curl -sf "http://localhost:$port/healthz" || {
+              echo "signaling server on $port never came up"; cat /tmp/signal-$port.log; exit 1;
+            }
+          done
+
+      - name: Signaling protocol
+        run: SIGNAL_URL=http://localhost:4000 npm run test:signal
+
+      - name: PIN gate
+        run: SIGNAL_URL=http://localhost:4100 npm run test:pin
+
+      # These two boot their own servers on their own ports.
+      - name: Allowed origins
+        run: npm run test:origins
+
+      - name: TURN wiring
+        run: npm run test:turn
+
+      - name: Signaling logs on failure
+        if: failure()
+        run: tail -50 /tmp/signal-4000.log /tmp/signal-4100.log || true
+
+  # Real Chrome, real WebRTC. Slower and inherently more timing-sensitive, so it
+  # is a separate job rather than something that blocks the fast feedback above.
+  browser:
+    name: Browser transfers + PWA
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+
+      - name: Install
+        run: |
+          npm ci
+          npm ci --prefix server
+
+      - name: Locate Chrome
+        run: |
+          for candidate in \
+            "$(command -v google-chrome || true)" \
+            "$(command -v google-chrome-stable || true)" \
+            "$(command -v chromium-browser || true)" \
+            "$(command -v chromium || true)"; do
+            if [ -n "$candidate" ]; then
+              echo "CHROME_PATH=$candidate" >> "$GITHUB_ENV"
+              "$candidate" --version
+              exit 0
+            fi
+          done
+          echo "no Chrome on this runner"; exit 1
+
+      - name: Build
+        run: npm run build
+
+      - name: Start signaling server
+        run: |
+          node server/index.js > /tmp/signal.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4000/healthz > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4000/healthz || { cat /tmp/signal.log; exit 1; }
+
+      # The PWA suite needs a production server: the service worker is
+      # deliberately not registered in dev.
+      - name: PWA (production server)
+        run: |
+          npm run start > /tmp/prod.log 2>&1 &
+          for i in $(seq 1 40); do
+            curl -sf http://localhost:3000 > /dev/null && break
+            sleep 1
+          done
+          npm run test:pwa
+
+      # The resume scenarios need the dev build, which is the only one carrying
+      # the hook that severs a live link. Killing the production server first is
+      # not optional: both write to .next, and a build under a running server
+      # leaves it serving chunks that no longer exist.
+      - name: Transfers and resume (dev server)
+        run: |
+          pkill -f "next start" || true
+          pkill -f next-server || true
+          sleep 2
+          rm -rf .next
+          npx next dev -p 3000 > /tmp/dev.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3000/send > /dev/null && break
+            sleep 1
+          done
+          npm run test:e2e
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          tail -40 /tmp/signal.log || true
+          tail -40 /tmp/prod.log || true
+          tail -40 /tmp/dev.log || true
