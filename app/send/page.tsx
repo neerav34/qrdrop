@@ -7,6 +7,7 @@ import DeviceLink, { type LinkState } from "@/components/DeviceLink";
 import { describeDevice } from "@/lib/device";
 import { bytes, clock, eta, pathLabel, rate } from "@/lib/format";
 import { useExitGuard } from "@/lib/hooks";
+import { relayForced } from "@/lib/relayFlag";
 import {
   startSender,
   type Progress,
@@ -47,6 +48,7 @@ export default function SendPage() {
   const [copied, setCopied] = useState(false);
   const [origin, setOrigin] = useState("");
   const [me, setMe] = useState<DeviceInfo | null>(null);
+  const [forceRelay, setForceRelay] = useState(false);
   const [elapsed, setElapsed] = useState<number | null>(null);
 
   const handle = useRef<SenderHandle | null>(null);
@@ -56,6 +58,7 @@ export default function SendPage() {
   useEffect(() => {
     setOrigin(window.location.origin);
     setMe(describeDevice());
+    setForceRelay(relayForced());
   }, []);
 
   useEffect(() => () => handle.current?.close(), []);
@@ -96,7 +99,8 @@ export default function SendPage() {
       onPath: setPath,
       onNotice: setNotice,
       onError: setError,
-    });
+    },
+    { forceRelay: relayForced() });
   }, []);
 
   function reset() {
@@ -115,7 +119,10 @@ export default function SendPage() {
     setElapsed(null);
   }
 
-  const shareUrl = sessionId && origin ? `${origin}/r/${sessionId}` : "";
+  const shareUrl =
+    sessionId && origin
+      ? `${origin}/r/${sessionId}${forceRelay ? "?relay=1" : ""}`
+      : "";
   const pct = progress.total
     ? Math.floor((progress.moved / progress.total) * 100)
     : 0;
@@ -210,6 +217,14 @@ export default function SendPage() {
                 : bytes(file.size)}
             </div>
           </div>
+
+          {forceRelay && (
+            <div className="notice warn">
+              <span className="notice-dot" />
+              Forcing the TURN relay (<code>?relay=1</code>). This spends relay
+              quota — drop the parameter for normal transfers.
+            </div>
+          )}
 
           {error && (
             <div className="notice bad">

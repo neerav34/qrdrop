@@ -168,7 +168,20 @@ export type SenderCallbacks = {
   onError: (msg: string) => void;
 };
 
-export function startSender(file: File, cb: SenderCallbacks): SenderHandle {
+export type LinkOptions = {
+  /**
+   * Ignore direct candidates and go through TURN. There is no way to prove a
+   * relay works by sitting on one network — the direct path always wins — so this
+   * exists to force the case on demand, from the `?relay=1` query parameter.
+   */
+  forceRelay?: boolean;
+};
+
+export function startSender(
+  file: File,
+  cb: SenderCallbacks,
+  opts: LinkOptions = {},
+): SenderHandle {
   const meta: FileMeta = {
     name: file.name,
     size: file.size,
@@ -267,7 +280,10 @@ export function startSender(file: File, cb: SenderCallbacks): SenderHandle {
     const myGen = gen;
     cb.onStatus("linking");
 
-    const p = new RTCPeerConnection({ iceServers });
+    const p = new RTCPeerConnection({
+      iceServers,
+      ...(opts.forceRelay ? { iceTransportPolicy: "relay" as const } : {}),
+    });
     pc = p;
 
     p.onicecandidate = (e) => {
@@ -531,6 +547,7 @@ export type ReceiverCallbacks = {
 export function startReceiver(
   sessionId: string,
   cb: ReceiverCallbacks,
+  opts: LinkOptions = {},
 ): ReceiverHandle {
   const socket: Socket = io(SIGNAL_URL, socketOptions());
 
@@ -633,7 +650,10 @@ export function startReceiver(
     const myGen = gen;
     cb.onStatus("linking");
 
-    const p = new RTCPeerConnection({ iceServers });
+    const p = new RTCPeerConnection({
+      iceServers,
+      ...(opts.forceRelay ? { iceTransportPolicy: "relay" as const } : {}),
+    });
     pc = p;
 
     p.onicecandidate = (e) => {

@@ -6,6 +6,7 @@ import DeviceLink, { type LinkState } from "@/components/DeviceLink";
 import { describeDevice } from "@/lib/device";
 import { bytes, eta, rate } from "@/lib/format";
 import { useExitGuard } from "@/lib/hooks";
+import { relayForced } from "@/lib/relayFlag";
 import {
   startReceiver,
   type Progress,
@@ -69,7 +70,8 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
         a.click();
         a.remove();
       },
-    });
+    },
+    { forceRelay: relayForced() });
     return () => {
       handle.current?.close();
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
