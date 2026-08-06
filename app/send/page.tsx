@@ -8,6 +8,7 @@ import { describeDevice } from "@/lib/device";
 import { bytes, clock, eta, pathLabel, rate } from "@/lib/format";
 import { useExitGuard } from "@/lib/hooks";
 import { relayForced } from "@/lib/relayFlag";
+import { formatPin, generatePin } from "@/lib/pin";
 import {
   startSender,
   type Progress,
@@ -55,6 +56,9 @@ export default function SendPage() {
   const [origin, setOrigin] = useState("");
   const [me, setMe] = useState<DeviceInfo | null>(null);
   const [forceRelay, setForceRelay] = useState(false);
+  const [requirePin, setRequirePin] = useState(false);
+  const [pin, setPin] = useState<string | null>(null);
+  const [pinAttempt, setPinAttempt] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState<number | null>(null);
 
   const handle = useRef<SenderHandle | null>(null);
@@ -101,6 +105,11 @@ export default function SendPage() {
       index: 0,
       fileCount: picked.length,
     });
+    // Generated here rather than in the engine, so the value on screen is
+    // provably the one that was hashed.
+    const usePin = requirePin ? generatePin() : null;
+    setPin(usePin);
+    setPinAttempt(null);
     handle.current = startSender(picked, {
       onSession: (id, exp) => {
         setSessionId(id);
@@ -111,10 +120,11 @@ export default function SendPage() {
       onPeer: setPeer,
       onPath: setPath,
       onNotice: setNotice,
+      onPinAttempt: setPinAttempt,
       onError: setError,
     },
-    { forceRelay: relayForced() });
-  }, []);
+    { forceRelay: relayForced(), pin: usePin ?? undefined });
+  }, [requirePin]);
 
   function reset() {
     handle.current?.close();
@@ -130,6 +140,8 @@ export default function SendPage() {
     setNotice(null);
     setError(null);
     setElapsed(null);
+    setPin(null);
+    setPinAttempt(null);
   }
 
   const totalSize = files ? files.reduce((n, f) => n + f.size, 0) : 0;
@@ -191,6 +203,22 @@ export default function SendPage() {
             hidden
             onChange={(e) => begin(Array.from(e.target.files || []))}
           />
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={requirePin}
+              onChange={(e) => setRequirePin(e.target.checked)}
+            />
+            <span className="toggle-track" aria-hidden />
+            <span>
+              Require a PIN
+              <small>
+                The receiver must enter a code you read out. Until they do, they
+                cannot even see what you are sending.
+              </small>
+            </span>
+          </label>
+
           <p className="footnote">
             Any file type, any size, as many as you like. Both devices stay on
             the page until the transfer finishes — if one drops out, it picks up
@@ -291,6 +319,20 @@ export default function SendPage() {
               <div className="status">
                 <span className="spinner" /> Waiting for someone to scan
               </div>
+              {pin && (
+                <div className="pinbox">
+                  <div className="pinbox-label">Tell them this PIN</div>
+                  <div className="pinbox-digits">{formatPin(pin)}</div>
+                </div>
+              )}
+              {pinAttempt !== null && (
+                <div className="notice warn">
+                  <span className="notice-dot" />
+                  Someone entered the wrong PIN — {pinAttempt}{" "}
+                  {pinAttempt === 1 ? "try" : "tries"} left before this transfer is
+                  cancelled. If that was not your recipient, cancel and start again.
+                </div>
+              )}
               {left > 0 && <div className="countdown">Code expires in {clock(left)}</div>}
             </>
           )}
@@ -331,8 +373,9 @@ export default function SendPage() {
               </button>
             </div>
             <p className="footnote">
-              Only show this code to the person you are sending to — whoever scans
-              it first gets the file. Or paste the link into a chat.
+              {pin
+                ? "Safe to paste into a chat — the code is useless without the PIN, and the PIN should travel some other way (say it out loud)."
+                : "Only show this code to the person you are sending to — whoever scans it first gets the file. Or paste the link into a chat."}
             </p>
             {totalSize > MEMORY_WARN_THRESHOLD && (
               <div className="notice warn">

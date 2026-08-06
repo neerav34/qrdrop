@@ -15,7 +15,8 @@
     "test:origins": "node test/origins.test.mjs",
     "test:turn": "node test/turn.test.mjs",
     "test:relay": "node test/relay.test.mjs",
-    "test:pwa": "node test/pwa.test.mjs"
+    "test:pwa": "node test/pwa.test.mjs",
+    "test:pin": "node test/pin.test.mjs"
   },
   "dependencies": {
     "html5-qrcode": "^2.3.8",

@@ -3,6 +3,7 @@
 import { io, type Socket } from "socket.io-client";
 import { describeDevice } from "./device";
 import { keepAwake, type KeepAwake } from "./keepAwake";
+import { pinDigest, randomSalt } from "./pin";
 import {
   directoryFactory,
   directoryPickerAvailable,
@@ -175,6 +176,8 @@ export type SenderCallbacks = {
   onPeer: (device: DeviceInfo | null) => void;
   /** The route the bytes are taking, once ICE has settled. */
   onPath: (path: LinkPath) => void;
+  /** A wrong PIN was tried. Worth showing — it may not be your recipient. */
+  onPinAttempt: (remaining: number) => void;
   /** Transient, self-healing condition. null clears it. */
   onNotice: (msg: string | null) => void;
   /** Terminal. The transfer is over. */
@@ -182,6 +185,8 @@ export type SenderCallbacks = {
 };
 
 export type LinkOptions = {
+  /** When set, the receiver must enter this PIN before learning anything. */
+  pin?: string;
   /**
    * Ignore direct candidates and go through TURN. There is no way to prove a
    * relay works by sitting on one network — the direct path always wins — so this
@@ -476,9 +481,16 @@ export function startSender(
       );
       return;
     }
-    socket.emit(
-      "create",
-      { files: metas, device: describeDevice() },
+    void (async () => {
+      const pin = opts.pin
+        ? await (async () => {
+            const salt = randomSalt();
+            return { salt, hash: await pinDigest(salt, opts.pin!) };
+          })()
+        : undefined;
+      socket.emit(
+        "create",
+        { files: metas, device: describeDevice(), pin },
       (res: {
         sessionId?: string;
         token?: string;
@@ -489,13 +501,14 @@ export function startSender(
         if (res.error || !res.sessionId || !res.token) {
           return fatal(res.error || "Could not create a session.");
         }
-        sessionId = res.sessionId;
-        token = res.token;
-        if (res.iceServers?.length) iceServers = res.iceServers;
-        cb.onSession(res.sessionId, res.expiresAt ?? Date.now() + 600_000);
-        cb.onStatus("waiting");
-      },
-    );
+          sessionId = res.sessionId;
+          token = res.token;
+          if (res.iceServers?.length) iceServers = res.iceServers;
+          cb.onSession(res.sessionId, res.expiresAt ?? Date.now() + 600_000);
+          cb.onStatus("waiting");
+        },
+      );
+    })();
   });
 
   socket.on("connect_error", () => {
@@ -525,6 +538,14 @@ export function startSender(
 
   socket.on("expired", () => {
     if (!finished) fatal("This transfer expired. Start a new one.");
+  });
+
+  socket.on("pin-attempt", (info: { remaining?: number }) => {
+    cb.onPinAttempt(Math.max(0, info?.remaining ?? 0));
+  });
+
+  socket.on("pin-locked", () => {
+    fatal("Too many wrong PINs were entered. This transfer was cancelled.");
   });
 
   socket.on("signal", async (payload: SignalPayload) => {
@@ -567,6 +588,8 @@ export function startSender(
 
 export type ReceiverStatus =
   | "connecting"
+  /** Waiting for the PIN. Nothing about the transfer is known yet. */
+  | "pin"
   | "offered"
   | "linking"
   | "receiving"
@@ -576,6 +599,8 @@ export type ReceiverStatus =
 export type ReceiverHandle = {
   /** Must be called from a click — a save dialog needs user activation. */
   accept: () => Promise<void>;
+  /** Resolves to an error message, or null when the PIN was right. */
+  submitPin: (pin: string) => Promise<string | null>;
   close: () => void;
 };
 
@@ -611,6 +636,7 @@ export function startReceiver(
   let token: string | null = null;
   let iceServers: RTCIceServer[] = ICE_SERVERS;
   let manifest: FileMeta[] | null = null;
+  let pinSalt: string | null = null;
   let totalSize = 0;
   let factory: SinkFactory | null = null;
   let sink: Sink | null = null;
@@ -886,9 +912,18 @@ export function startReceiver(
         peerDevice?: DeviceInfo;
         error?: string;
         iceServers?: RTCIceServer[];
+        needsPin?: boolean;
+        pinSalt?: string;
       }) => {
-        if (res.error || !res.files?.length) {
-          return fatal(res.error || "That transfer is no longer available.");
+        if (res.error) return fatal(res.error);
+        // Behind a PIN this reply deliberately contains nothing else.
+        if (res.needsPin) {
+          pinSalt = res.pinSalt ?? null;
+          cb.onStatus("pin");
+          return;
+        }
+        if (!res.files?.length) {
+          return fatal("That transfer is no longer available.");
         }
         if (res.iceServers?.length) iceServers = res.iceServers;
         manifest = res.files;
@@ -952,6 +987,47 @@ export function startReceiver(
   }
 
   return {
+    async submitPin(pin: string) {
+      if (!pinSalt) return "This transfer does not need a PIN.";
+      const hash = await pinDigest(pinSalt, pin);
+      return new Promise<string | null>((resolve) => {
+        socket.emit(
+          "verify",
+          { sessionId, hash },
+          (res: {
+            files?: FileMeta[];
+            peerDevice?: DeviceInfo;
+            iceServers?: RTCIceServer[];
+            error?: string;
+            attemptsLeft?: number;
+          }) => {
+            if (res?.error) {
+              // Out of attempts is terminal; the server has dropped the session.
+              if (res.attemptsLeft === undefined) fatal(res.error);
+              resolve(
+                res.attemptsLeft !== undefined
+                  ? `${res.error} ${res.attemptsLeft} ${
+                      res.attemptsLeft === 1 ? "try" : "tries"
+                    } left.`
+                  : res.error,
+              );
+              return;
+            }
+            if (!res?.files?.length) {
+              resolve("That transfer is no longer available.");
+              return;
+            }
+            if (res.iceServers?.length) iceServers = res.iceServers;
+            manifest = res.files;
+            totalSize = res.files.reduce((n, f) => n + f.size, 0);
+            cb.onManifest(res.files);
+            cb.onPeer(res.peerDevice ?? null);
+            cb.onStatus("offered");
+            resolve(null);
+          },
+        );
+      });
+    },
     async accept() {
       if (!manifest) return;
       cb.onNotice(null);

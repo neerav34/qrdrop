@@ -79,6 +79,33 @@ Browsers may block the second and later automatic downloads in a batch, so the
 file list always keeps an explicit Save link per file for anything the browser
 skipped.
 
+## Optional PIN
+
+A QR code is a bearer token: anyone who photographs it, shoulder-surfs it, or
+catches it in a screen share can claim the transfer — and because sessions are
+single-use, a snooper who acts *first* beats the intended recipient. Switching on
+**Require a PIN** puts a six-digit code in the way, which travels out of band
+because you read it aloud.
+
+Two things about the design are worth stating plainly:
+
+- **The PIN gates the manifest, not just the bytes.** A locked `join` returns
+  nothing at all — no filenames, no sizes, not even the sender's device. A gate
+  that protected the file while announcing "3 files, 1.2 GB, from an iPhone" would
+  be worth much less.
+- **The attempt limit is the actual security control, not the hashing.** Six
+  digits is a million possibilities: trivial to brute-force with unlimited tries,
+  hopeless at five. Attempts are counted on the *session*, so reconnecting cannot
+  buy five more, and running out destroys the session rather than merely refusing
+  — a burned code can't be ground down at leisure. The sender sees a warning on
+  each wrong guess, since it may not be their recipient trying.
+
+The PIN is salted and hashed in the browser, so it never crosses the wire or lands
+in a server log. That is hygiene rather than protection *from* the server, which
+could brute-force a six-digit digest instantly and already sees every SDP it
+relays. A PAKE would fix that and is deliberately out of scope — the signaling
+server is trusted for routing either way.
+
 ## Surviving interruptions
 
 A phone that sleeps or switches apps kills the connection, so the transfer is
@@ -130,6 +157,11 @@ npm run dev              # signal server NOT running
 npm run test:coldstart   # points the page at a dead signaling server: must wait
                          # rather than fail, then recover once it answers
 
+npm run test:pin         # the PIN gate: a locked join leaking nothing, attempts
+                         # counted per session so reconnecting can't reset them,
+                         # the limit destroying the session, and accept refusing
+                         # to skip verification
+
 npm run test:origins     # ALLOWED_ORIGINS: exact match, refusal, and the
                          # trailing-slash case that broke the first deployment
 npm run build            # needed by the leak check below
@@ -146,7 +178,7 @@ E2E_URL=https://qrdrop-seven.vercel.app npm run test:relay
                          # spends relay quota, so it is opt-in.
 ```
 
-All suites pass on the current tree (34 signal + 14 origins + 30 e2e + 4 cold-start + 16 TURN + 16 PWA + 6 relay against live). Leave a minute between
+All suites pass on the current tree (34 signal + 22 PIN + 14 origins + 40 e2e + 4 cold-start + 16 TURN + 16 PWA + 6 relay against live). Leave a minute between
 them — the signal suite deliberately trips the 10-sessions-per-IP-per-minute
 limit, which would otherwise refuse the e2e run's own session. And don't run
 `next build` while `next dev` is live; they share `.next`.

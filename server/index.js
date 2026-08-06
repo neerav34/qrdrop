@@ -39,6 +39,7 @@ const SWEEP_MS = 15 * 1000;
 const MAX_SESSIONS_PER_IP_PER_MIN = 10;
 const MAX_NAME_LEN = 260;
 const MAX_FILES = 100; // keep in step with MAX_FILES in lib/protocol.ts
+const MAX_PIN_ATTEMPTS = 5; // keep in step with lib/protocol.ts
 const MAX_LABEL_LEN = 40;
 const MAX_SIZE_BYTES = 100 * 1024 * 1024 * 1024; // sanity bound on claimed size
 const MAX_SIGNAL_BYTES = 16 * 1024; // an SDP blob is a few KB at most
@@ -267,6 +268,35 @@ function validMeta(m) {
   );
 }
 
+/**
+ * An optional PIN, held only as a salted digest. The sender salts and hashes it in
+ * the browser, so the PIN itself never crosses the wire or lands in a log here.
+ *
+ * That is hygiene rather than a defence against this server — six digits behind a
+ * known salt is brute-forceable in milliseconds by anyone holding the digest, and
+ * a signaling server can already see every SDP it relays. The control that gives
+ * a short PIN real value is the attempt limit below, which is enforced per
+ * session so reconnecting cannot reset it.
+ */
+function validPin(p) {
+  return (
+    p &&
+    typeof p === "object" &&
+    typeof p.salt === "string" &&
+    /^[0-9a-f]{32}$/.test(p.salt) &&
+    typeof p.hash === "string" &&
+    /^[0-9a-f]{64}$/.test(p.hash)
+  );
+}
+
+/** Constant-time compare, so a digest can't be probed a byte at a time. */
+function digestsMatch(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
+}
+
 /** Device labels are shown verbatim in the peer's UI, so keep them boring. */
 function cleanDevice(d) {
   if (!d || typeof d !== "object") return null;
@@ -373,6 +403,11 @@ io.on("connection", (socket) => {
       return ack({ error: "Too many transfers started. Wait a minute." });
     }
 
+    const pin = payload.pin;
+    if (pin !== undefined && pin !== null && !validPin(pin)) {
+      return ack({ error: "Invalid PIN details." });
+    }
+
     const sessionId = crypto.randomUUID();
     const token = crypto.randomUUID();
     const createdAt = Date.now();
@@ -387,6 +422,7 @@ io.on("connection", (socket) => {
         offlineSince: null,
       },
       receiver: null,
+      pin: pin ? { salt: pin.salt, hash: pin.hash, attempts: 0 } : null,
       status: "waiting",
     });
     socketSession.set(socket.id, sessionId);
@@ -412,6 +448,65 @@ io.on("connection", (socket) => {
     if (s.sender.socketId === socket.id) return ack({ error: "You are the sender." });
     // Remember the peek so `accept` needn't take an id from the client again.
     socket.data.joined = sessionId;
+
+    /*
+     * Behind a PIN, this reply carries nothing worth having. Not the file names,
+     * not the sizes, not even the sender's device — if a snooped QR still leaked
+     * "3 files, 1.2 GB, from an iPhone", the PIN would be protecting the bytes
+     * while giving away what they are.
+     */
+    if (s.pin && socket.data.verified !== sessionId) {
+      return ack({ needsPin: true, pinSalt: s.pin.salt });
+    }
+
+    ack({
+      files: s.files,
+      peerDevice: s.sender.device,
+      iceServers: await getIceServers(),
+    });
+  });
+
+  /**
+   * Exchange a PIN digest for the manifest. Attempts are counted on the session,
+   * not the socket, so reconnecting cannot buy a fresh five guesses — and running
+   * out destroys the session rather than merely refusing, so a burned code cannot
+   * be ground down at leisure.
+   */
+  socket.on("verify", async (payload, ack) => {
+    if (typeof ack !== "function") return;
+    const sessionId = payload && payload.sessionId;
+    const hash = payload && payload.hash;
+    if (typeof sessionId !== "string" || sessionId.length > 64) {
+      return ack({ error: "Invalid session." });
+    }
+    const s = sessions.get(sessionId);
+    if (!s) return ack({ error: "This transfer has expired or already finished." });
+    if (!s.pin) {
+      // Nothing to verify; hand over the manifest as `join` would have.
+      socket.data.joined = sessionId;
+      return ack({ files: s.files, peerDevice: s.sender.device, iceServers: await getIceServers() });
+    }
+    if (s.receiver && s.receiver.socketId !== socket.id) {
+      return ack({ error: "Someone else already claimed this transfer." });
+    }
+    if (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)) {
+      return ack({ error: "Invalid PIN." });
+    }
+
+    if (!digestsMatch(hash, s.pin.hash)) {
+      s.pin.attempts += 1;
+      const left = MAX_PIN_ATTEMPTS - s.pin.attempts;
+      io.to(s.sender.socketId).emit("pin-attempt", { remaining: Math.max(0, left) });
+      if (left <= 0) {
+        destroy(sessionId, "pin-locked");
+        return ack({ error: "Too many wrong PINs. This transfer has been cancelled." });
+      }
+      return ack({ error: "Wrong PIN.", attemptsLeft: left });
+    }
+
+    socket.data.verified = sessionId;
+    socket.data.joined = sessionId;
+    io.to(s.sender.socketId).emit("pin-ok");
     ack({
       files: s.files,
       peerDevice: s.sender.device,
@@ -423,6 +518,12 @@ io.on("connection", (socket) => {
     const s = sessions.get(socket.data.joined);
     if (!s || s.receiver) {
       if (typeof ack === "function") ack({ error: "Transfer no longer available." });
+      return;
+    }
+    // The PIN gate is enforced here too, not just at `join` — otherwise a client
+    // could simply skip straight to accepting.
+    if (s.pin && socket.data.verified !== s.sessionId) {
+      if (typeof ack === "function") ack({ error: "Enter the PIN first." });
       return;
     }
     const token = crypto.randomUUID();
@@ -456,6 +557,9 @@ io.on("connection", (socket) => {
     const side = role === "sender" ? s.sender : s.receiver;
     if (!side || side.token !== token) return ack({ error: "Invalid resume token." });
 
+    // The resume token already proves this is the same participant, so a
+    // reconnecting receiver does not re-enter the PIN.
+    if (role === "receiver") socket.data.verified = sessionId;
     if (side.socketId) socketSession.delete(side.socketId);
     side.socketId = socket.id;
     side.offlineSince = null;

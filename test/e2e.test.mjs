@@ -67,7 +67,7 @@ const browser = await puppeteer.launch({
 });
 
 /** Opens the sender, picks the file, and returns the share URL. */
-async function openSender(payloadPaths, tag) {
+async function openSender(payloadPaths, tag, opts = {}) {
   const paths = Array.isArray(payloadPaths) ? payloadPaths : [payloadPaths];
   const page = await browser.newPage();
   page.on("pageerror", (e) => log(`  [${tag} sender pageerror]`, e.message));
@@ -76,6 +76,9 @@ async function openSender(payloadPaths, tag) {
   });
   await page.goto(`${BASE}/send`, { waitUntil: "networkidle2" });
   const input = await page.waitForSelector("input[type=file]");
+  if (opts.requirePin) {
+    await page.click(".toggle-track");
+  }
   await input.uploadFile(...paths);
 
   // Surface a server-side refusal (e.g. the per-IP rate limit, if the signal
@@ -381,6 +384,73 @@ try {
     }
     // If the seam duplicated or dropped a chunk, this is where it shows.
     check("every file still matches by sha256 after the resume", ok);
+    await Promise.all([send.close(), recv.close()]);
+  }
+  // ================================= 5. the PIN gate, through the real UI
+  log("\n▸ scenario 5 — PIN-protected transfer");
+  {
+    const payload = makePayload("payslip.pdf", 700 * 1024 + 3);
+    const dl = path.join(WORK, "dl5");
+    const { page: send, url } = await openSender(payload.file, "s5", {
+      requirePin: true,
+    });
+
+    const pin = await send
+      .$eval(".pinbox-digits", (el) => el.textContent.replace(/\D/g, ""))
+      .catch(() => null);
+    check("the sender is shown a 6-digit PIN", /^\d{6}$/.test(pin || ""), pin || "(none)");
+
+    const recv = await openReceiver(url, dl, "s5");
+    await recv.waitForSelector(".pin-input", { timeout: 20000 });
+    check("the receiver is asked for the PIN first", true);
+
+    // Nothing about the transfer may be on screen yet.
+    const bodyBeforePin = await recv.evaluate(() => document.body.innerText);
+    check(
+      "the filename is not revealed before the PIN",
+      !bodyBeforePin.includes("payslip"),
+      bodyBeforePin.replace(/\n+/g, " | ").slice(0, 80),
+    );
+    check(
+      "no Accept button is reachable before the PIN",
+      !(await recv.$(".btn.primary:not([disabled])")) ||
+        !(await recv.$eval(".btn.primary", (el) => el.textContent)).includes("Accept"),
+    );
+
+    // A wrong PIN must be refused, and reported to the sender.
+    await recv.type(".pin-input", "000000");
+    await recv.click(".btn.primary");
+    await recv.waitForSelector(".notice.bad", { timeout: 15000 });
+    const wrongMsg = await recv.$eval(".notice.bad", (el) => el.textContent);
+    check("a wrong PIN is refused with attempts left", /Wrong PIN/i.test(wrongMsg), wrongMsg.trim());
+
+    await send.waitForFunction(
+      () => document.body.innerText.includes("wrong PIN"),
+      { timeout: 15000 },
+    );
+    check("the sender is warned about the wrong guess", true);
+
+    // Now the real one.
+    await recv.$eval(".pin-input", (el) => (el.value = ""));
+    await recv.type(".pin-input", pin);
+    await recv.click(".btn.primary");
+    await recv.waitForFunction(
+      () => document.body.innerText.includes("payslip.pdf"),
+      { timeout: 20000 },
+    );
+    check("the right PIN reveals the transfer", true);
+
+    await (await recv.waitForSelector(".btn.primary", { timeout: 10000 })).click();
+    await recv.waitForFunction(
+      () => document.querySelector("a.btn.primary")?.textContent?.includes("Save file"),
+      { timeout: 90000 },
+    );
+    const got = await waitForDownload(dl);
+    check("the PIN-gated file arrives", !!got, got || "(nothing)");
+    if (got) {
+      const buf = fs.readFileSync(got);
+      check("and matches its source by sha256", sha(buf) === payload.hash);
+    }
     await Promise.all([send.close(), recv.close()]);
   }
 } catch (e) {

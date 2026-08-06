@@ -52,6 +52,15 @@ export type ControlFrame =
 /** How many files one session may carry. */
 export const MAX_FILES = 100;
 
+/**
+ * PIN length, and how many wrong guesses a session tolerates before it is
+ * destroyed. The attempt limit is what makes six digits meaningful: a million
+ * possibilities is nothing to a script with unlimited tries, and plenty when it
+ * gets five.
+ */
+export const PIN_LENGTH = 6;
+export const MAX_PIN_ATTEMPTS = 5;
+
 export const CHUNK_SIZE = 16 * 1024;
 
 /**

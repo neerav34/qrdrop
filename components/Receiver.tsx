@@ -7,6 +7,7 @@ import { describeDevice } from "@/lib/device";
 import { bytes, eta, rate } from "@/lib/format";
 import { useExitGuard } from "@/lib/hooks";
 import { relayForced } from "@/lib/relayFlag";
+import { PIN_LENGTH } from "@/lib/protocol";
 import {
   startReceiver,
   type Progress,
@@ -18,6 +19,7 @@ import type { DeviceInfo, FileMeta } from "@/lib/protocol";
 
 const LINK_STATE: Record<ReceiverStatus, LinkState> = {
   connecting: "idle",
+  pin: "idle",
   offered: "idle",
   linking: "linking",
   receiving: "moving",
@@ -47,6 +49,9 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<Saved[]>([]);
   const [complete, setComplete] = useState(false);
+  const [pin, setPin] = useState("");
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
 
   const handle = useRef<ReceiverHandle | null>(null);
   const urls = useRef<string[]>([]);
@@ -205,6 +210,69 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
                 </p>
               </>
             )}
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (status === "pin") {
+    const submit = async () => {
+      if (pin.length !== PIN_LENGTH || checking) return;
+      setChecking(true);
+      setPinError(null);
+      const err = await handle.current!.submitPin(pin);
+      setChecking(false);
+      if (err) {
+        setPinError(err);
+        setPin("");
+      }
+    };
+    return (
+      <main className="shell">
+        <div className="panel">
+          <div className="card">
+            <div className="lock" aria-hidden>
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="4" y="10.5" width="16" height="10.5" rx="2.5" />
+                <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+              </svg>
+            </div>
+            <h2>Enter the PIN</h2>
+            <p className="footnote">
+              The sender has a {PIN_LENGTH}-digit code on their screen. Ask them
+              for it — nothing about this transfer is shown until it matches.
+            </p>
+            <input
+              className="pin-input"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              aria-label="Transfer PIN"
+              maxLength={PIN_LENGTH}
+              value={pin}
+              autoFocus
+              disabled={checking}
+              onChange={(e) => {
+                setPin(e.target.value.replace(/\D/g, "").slice(0, PIN_LENGTH));
+                setPinError(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void submit();
+              }}
+            />
+            {pinError && (
+              <div className="notice bad">
+                <span className="notice-dot" />
+                {pinError}
+              </div>
+            )}
+            <button
+              className="btn primary wide"
+              disabled={pin.length !== PIN_LENGTH || checking}
+              onClick={() => void submit()}
+            >
+              {checking ? "Checking…" : "Unlock transfer"}
+            </button>
           </div>
         </div>
       </main>
