@@ -140,6 +140,67 @@ candidate pair, so it's a measurement, not a claim.
 
 ---
 
+## Part 5 — TURN, so it works across networks (optional)
+
+Without TURN, a transfer needs the two devices to reach each other directly:
+same Wi-Fi, or one on the other's hotspot. TURN adds a relay for when they
+can't — different networks entirely, or a Wi-Fi that blocks device-to-device
+traffic.
+
+**Relay is a last resort, not a default.** ICE ranks relay candidates below
+direct ones, so a transfer that can go peer-to-peer still does. Relay bandwidth
+is only consumed by transfers that would otherwise have failed, which is what
+makes even a small free allowance workable.
+
+The sender's status line tells you which happened: `Direct · same network`,
+`Direct · peer-to-peer`, or `Relayed connection`. It is read off the negotiated
+ICE candidate pair, so it is a measurement rather than a claim.
+
+### Picking a provider
+
+| Provider | Card needed | Free relay traffic | Can it bill you? |
+|---|---|---|---|
+| [Metered Open Relay](https://www.metered.ca/tools/openrelay/), free account | **no** | 0.5 GB/month | no — it stops, never charges |
+| Metered, card added | yes | 20 GB/month | no — no overages |
+| [Cloudflare Realtime](https://developers.cloudflare.com/realtime/turn/) | yes | 1,000 GB/month | yes, $0.05/GB after |
+| Self-hosted `coturn` | depends on the VM | your bandwidth | no |
+
+Free tiers move around — check the current terms when you sign up.
+
+### Option A — fixed credentials (Metered, coturn, anything)
+
+Set these on the **Render** service and redeploy:
+
+```
+TURN_URLS       = turn:relay.example:80,turns:relay.example:443
+TURN_USERNAME   = your-username
+TURN_CREDENTIAL = your-credential
+```
+
+### Option B — Cloudflare, with minted credentials
+
+Cloudflare issues short-lived credentials from a key that stays on the server.
+Create a TURN key in the dashboard, then set on **Render**:
+
+```
+TURN_KEY_ID     = your-key-id
+TURN_API_TOKEN  = your-api-token
+```
+
+The server mints a credential, caches it, and refreshes at 80% of its lifetime.
+
+### Either way
+
+- **Never put TURN credentials in a `NEXT_PUBLIC_` variable.** Anything in the
+  web bundle is public, and a lifted credential spends your quota. The server
+  hands credentials to clients over the existing socket instead;
+  `npm run test:turn` asserts nothing leaks into the build.
+- A provider outage degrades to STUN rather than breaking transfers — direct
+  paths keep working, which is the majority case. Also covered by that suite.
+- Check `/healthz`: it reports `"turn":"cloudflare"`, `"static"` or `"none"`.
+
+---
+
 ## The one real cost of free hosting
 
 Render's free tier **spins the service down after about 15 minutes of

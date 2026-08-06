@@ -178,6 +178,8 @@ export function startSender(file: File, cb: SenderCallbacks): SenderHandle {
 
   let sessionId: string | null = null;
   let token: string | null = null;
+  /** Handed over by the signaling server; TURN credentials never live in the bundle. */
+  let iceServers: RTCIceServer[] = ICE_SERVERS;
   let pc: RTCPeerConnection | null = null;
   let channel: RTCDataChannel | null = null;
   /** Bumped on every teardown so stale callbacks and pumps abandon quietly. */
@@ -265,7 +267,7 @@ export function startSender(file: File, cb: SenderCallbacks): SenderHandle {
     const myGen = gen;
     cb.onStatus("linking");
 
-    const p = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const p = new RTCPeerConnection({ iceServers });
     pc = p;
 
     p.onicecandidate = (e) => {
@@ -393,8 +395,14 @@ export function startSender(file: File, cb: SenderCallbacks): SenderHandle {
       socket.emit(
         "rejoin",
         { sessionId, token, role: "sender" },
-        (res: { error?: string; peerOnline?: boolean; peerDevice?: DeviceInfo }) => {
+        (res: {
+          error?: string;
+          peerOnline?: boolean;
+          peerDevice?: DeviceInfo;
+          iceServers?: RTCIceServer[];
+        }) => {
           if (res.error) return fatal(res.error);
+          if (res.iceServers?.length) iceServers = res.iceServers;
           if (res.peerDevice) cb.onPeer(res.peerDevice);
           if (res.peerOnline) {
             resumedOk();
@@ -412,12 +420,14 @@ export function startSender(file: File, cb: SenderCallbacks): SenderHandle {
         token?: string;
         expiresAt?: number;
         error?: string;
+        iceServers?: RTCIceServer[];
       }) => {
         if (res.error || !res.sessionId || !res.token) {
           return fatal(res.error || "Could not create a session.");
         }
         sessionId = res.sessionId;
         token = res.token;
+        if (res.iceServers?.length) iceServers = res.iceServers;
         cb.onSession(res.sessionId, res.expiresAt ?? Date.now() + 600_000);
         cb.onStatus("waiting");
       },
@@ -525,6 +535,7 @@ export function startReceiver(
   const socket: Socket = io(SIGNAL_URL, socketOptions());
 
   let token: string | null = null;
+  let iceServers: RTCIceServer[] = ICE_SERVERS;
   let meta: FileMeta | null = null;
   let sink: Sink | null = null;
   let received = 0;
@@ -622,7 +633,7 @@ export function startReceiver(
     const myGen = gen;
     cb.onStatus("linking");
 
-    const p = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const p = new RTCPeerConnection({ iceServers });
     pc = p;
 
     p.onicecandidate = (e) => {
@@ -736,8 +747,14 @@ export function startReceiver(
       socket.emit(
         "rejoin",
         { sessionId, token, role: "receiver" },
-        (res: { error?: string; peerDevice?: DeviceInfo; file?: FileMeta }) => {
+        (res: {
+          error?: string;
+          peerDevice?: DeviceInfo;
+          file?: FileMeta;
+          iceServers?: RTCIceServer[];
+        }) => {
           if (res.error) return fatal(res.error);
+          if (res.iceServers?.length) iceServers = res.iceServers;
           if (res.peerDevice) cb.onPeer(res.peerDevice);
           resumedOk();
         },
@@ -747,10 +764,16 @@ export function startReceiver(
     socket.emit(
       "join",
       sessionId,
-      (res: { file?: FileMeta; peerDevice?: DeviceInfo; error?: string }) => {
+      (res: {
+        file?: FileMeta;
+        peerDevice?: DeviceInfo;
+        error?: string;
+        iceServers?: RTCIceServer[];
+      }) => {
         if (res.error || !res.file) {
           return fatal(res.error || "That transfer is no longer available.");
         }
+        if (res.iceServers?.length) iceServers = res.iceServers;
         meta = res.file;
         cb.onMeta(res.file);
         cb.onPeer(res.peerDevice ?? null);
@@ -834,10 +857,11 @@ export function startReceiver(
       socket.emit(
         "accept",
         { device: describeDevice() },
-        (res: { token?: string; error?: string }) => {
+        (res: { token?: string; error?: string; iceServers?: RTCIceServer[] }) => {
           if (res?.error || !res?.token) {
             return fatal(res?.error || "Could not join the transfer.");
           }
+          if (res.iceServers?.length) iceServers = res.iceServers;
           token = res.token;
         },
       );

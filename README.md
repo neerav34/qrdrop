@@ -29,7 +29,7 @@ Receiver scans it ────────────┘
 | [lib/sink.ts](lib/sink.ts) | Where received bytes go: memory blob, or streamed to disk for big files |
 | [lib/keepAwake.ts](lib/keepAwake.ts) | Screen wake lock held for the duration of a transfer |
 | [components/DeviceLink.tsx](components/DeviceLink.tsx) | The two-device visual — the live state of the link |
-| [server/](server/) | Socket.io signaling server — relays SDP/ICE only, deployed separately |
+| [server/](server/) | Socket.io signaling server — relays SDP/ICE only, mints TURN credentials, deployed separately |
 | [test/](test/) | Protocol tests + real-Chrome transfer and resume tests |
 
 ## Run it locally
@@ -90,9 +90,17 @@ RESUME_RUNS=5 npm run test:e2e   # repeat the resume scenario to shake out races
 npm run dev              # signal server NOT running
 npm run test:coldstart   # points the page at a dead signaling server: must wait
                          # rather than fail, then recover once it answers
+
+npm run test:origins     # ALLOWED_ORIGINS: exact match, refusal, and the
+                         # trailing-slash case that broke the first deployment
+npm run build            # needed by the leak check below
+npm run test:turn        # TURN wiring against a stub provider: credentials
+                         # delivered over the socket, minted once not per
+                         # session, absent from the web bundle, and a provider
+                         # outage degrading to STUN instead of breaking
 ```
 
-All three suites pass on the current tree (28 + 18 + 4 checks; 39 in the e2e with `RESUME_RUNS=4`). Leave a minute between
+All five suites pass on the current tree (28 signal + 14 origins + 18 e2e + 4 cold-start + 16 TURN). Leave a minute between
 them — the signal suite deliberately trips the 10-sessions-per-IP-per-minute
 limit, which would otherwise refuse the e2e run's own session. And don't run
 `next build` while `next dev` is live; they share `.next`.
@@ -171,11 +179,13 @@ Everything respects `prefers-reduced-motion`.
 
 ## Known limits
 
-- **Same network.** There is no TURN relay, so the two devices must be able to
-  reach each other directly — same Wi-Fi, or one device on the other's hotspot.
-  On a hotspot the file crosses the local Wi-Fi link and costs no mobile data;
-  only the page load and handshake go over the network. Some office and hotel
-  Wi-Fi blocks device-to-device traffic and will break it.
+- **Cross-network needs TURN configured.** Out of the box the two devices must
+  reach each other directly — same Wi-Fi, or one on the other's hotspot. On a
+  hotspot the file crosses the local Wi-Fi link and costs no mobile data. Set the
+  `TURN_*` variables on the signaling server (see [DEPLOY.md](DEPLOY.md)) to add
+  a relay for the cases that can't go direct: different networks, or a Wi-Fi that
+  blocks device-to-device traffic. Relay is a last resort — ICE prefers direct
+  paths, so relay bandwidth is only spent where a transfer would have failed.
 - **Files above 256 MB stream to disk**, which removes the memory ceiling — but
   only where the File System Access API exists (desktop Chrome/Edge). Elsewhere
   the receiver buffers in memory, so multi-gigabyte transfers to a phone can

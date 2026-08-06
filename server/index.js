@@ -42,6 +42,111 @@ const MAX_LABEL_LEN = 40;
 const MAX_SIZE_BYTES = 100 * 1024 * 1024 * 1024; // sanity bound on claimed size
 const MAX_SIGNAL_BYTES = 16 * 1024; // an SDP blob is a few KB at most
 
+// ---------------------------------------------------------------- ICE / TURN
+
+/**
+ * STUN alone lets two devices find each other when a direct path exists. TURN is
+ * the fallback that relays the bytes when it doesn't — different networks, or a
+ * Wi-Fi that blocks device-to-device traffic.
+ *
+ * TURN credentials are minted here and handed to clients over the existing
+ * socket, never embedded in the web bundle: a long-lived credential shipped to
+ * the browser is a credential anyone can lift and spend your free quota on.
+ *
+ * Relay is a last resort, not a default — ICE ranks relay candidates below host
+ * and reflexive ones, so a transfer that can go direct still does, and relay
+ * bandwidth is only consumed by transfers that would otherwise have failed.
+ */
+const STUN_ONLY = [
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+];
+
+const TURN_TTL_SECONDS = Number(process.env.TURN_TTL_SECONDS || 43200); // 12h
+// Overridable so tests can point at a stub instead of the real provider.
+const TURN_API_BASE =
+  process.env.TURN_API_BASE || "https://rtc.live.cloudflare.com";
+
+/** Any provider with fixed credentials: Metered's Open Relay, self-hosted coturn. */
+function staticTurn() {
+  const urls = (process.env.TURN_URLS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!urls.length) return null;
+  const username = process.env.TURN_USERNAME;
+  const credential = process.env.TURN_CREDENTIAL;
+  if (!username || !credential) {
+    console.warn(
+      "TURN_URLS is set but TURN_USERNAME/TURN_CREDENTIAL are missing — ignoring it.",
+    );
+    return null;
+  }
+  return [...STUN_ONLY, { urls, username, credential }];
+}
+
+/** Cloudflare mints short-lived credentials from a key that stays server-side. */
+async function cloudflareTurn() {
+  const keyId = process.env.TURN_KEY_ID;
+  const token = process.env.TURN_API_TOKEN;
+  if (!keyId || !token) return null;
+  const res = await fetch(
+    `${TURN_API_BASE}/v1/turn/keys/${keyId}/credentials/generate-ice-servers`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ttl: TURN_TTL_SECONDS }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`TURN credential request failed: ${res.status}`);
+  }
+  const body = await res.json();
+  const servers = body?.iceServers;
+  const list = Array.isArray(servers) ? servers : servers ? [servers] : [];
+  if (!list.length) throw new Error("TURN credential response had no iceServers");
+  return list;
+}
+
+const turnMode = process.env.TURN_URLS
+  ? "static"
+  : process.env.TURN_KEY_ID
+    ? "cloudflare"
+    : "none";
+
+/**
+ * Cached because credentials are per-account, not per-session — one mint serves
+ * every transfer until it nears expiry. Refreshed early so no client is ever
+ * handed something about to die mid-transfer.
+ */
+let iceCache = { servers: null, expiresAt: 0 };
+
+async function getIceServers() {
+  if (turnMode === "none") return STUN_ONLY;
+  if (turnMode === "static") {
+    if (!iceCache.servers) iceCache = { servers: staticTurn(), expiresAt: Infinity };
+    return iceCache.servers || STUN_ONLY;
+  }
+  if (iceCache.servers && Date.now() < iceCache.expiresAt) return iceCache.servers;
+  try {
+    const servers = await cloudflareTurn();
+    iceCache = {
+      servers,
+      // Refresh at 80% of the TTL, so a handover never lands on an expiry.
+      expiresAt: Date.now() + TURN_TTL_SECONDS * 1000 * 0.8,
+    };
+    return servers;
+  } catch (e) {
+    // A TURN outage must not take the whole app down — direct transfers still
+    // work, which is the majority case. Retry on the next request.
+    console.warn(`Could not mint TURN credentials (${e.message}) — using STUN only.`);
+    iceCache = { servers: null, expiresAt: 0 };
+    return STUN_ONLY;
+  }
+}
+
 /**
  * An `Origin` header is always scheme + host + optional port, with no path and no
  * trailing slash. Dashboards show site URLs *with* a trailing slash though, so
@@ -110,7 +215,7 @@ const originCheck = (rawOrigin, callback) => {
 const app = express();
 app.get("/", (_req, res) => res.type("text").send("QRDrop signaling: ok"));
 app.get("/healthz", (_req, res) =>
-  res.json({ ok: true, sessions: sessions.size }),
+  res.json({ ok: true, sessions: sessions.size, turn: turnMode }),
 );
 
 const server = http.createServer(app);
@@ -245,7 +350,7 @@ setInterval(() => {
 }, SWEEP_MS).unref?.();
 
 io.on("connection", (socket) => {
-  socket.on("create", (payload, ack) => {
+  socket.on("create", async (payload, ack) => {
     if (typeof ack !== "function") return;
     if (socketSession.has(socket.id)) {
       return ack({ error: "This connection already has a session." });
@@ -273,10 +378,15 @@ io.on("connection", (socket) => {
       status: "waiting",
     });
     socketSession.set(socket.id, sessionId);
-    ack({ sessionId, token, expiresAt: createdAt + WAITING_TTL_MS });
+    ack({
+      sessionId,
+      token,
+      expiresAt: createdAt + WAITING_TTL_MS,
+      iceServers: await getIceServers(),
+    });
   });
 
-  socket.on("join", (sessionId, ack) => {
+  socket.on("join", async (sessionId, ack) => {
     if (typeof ack !== "function") return;
     if (typeof sessionId !== "string" || sessionId.length > 64) {
       return ack({ error: "Invalid session." });
@@ -290,10 +400,14 @@ io.on("connection", (socket) => {
     if (s.sender.socketId === socket.id) return ack({ error: "You are the sender." });
     // Remember the peek so `accept` needn't take an id from the client again.
     socket.data.joined = sessionId;
-    ack({ file: s.file, peerDevice: s.sender.device });
+    ack({
+      file: s.file,
+      peerDevice: s.sender.device,
+      iceServers: await getIceServers(),
+    });
   });
 
-  socket.on("accept", (payload, ack) => {
+  socket.on("accept", async (payload, ack) => {
     const s = sessions.get(socket.data.joined);
     if (!s || s.receiver) {
       if (typeof ack === "function") ack({ error: "Transfer no longer available." });
@@ -308,7 +422,9 @@ io.on("connection", (socket) => {
     };
     s.status = "connected";
     socketSession.set(socket.id, s.sessionId);
-    if (typeof ack === "function") ack({ token });
+    if (typeof ack === "function") {
+      ack({ token, iceServers: await getIceServers() });
+    }
     io.to(s.sender.socketId).emit("receiver-ready", { device: s.receiver.device });
   });
 
@@ -316,7 +432,7 @@ io.on("connection", (socket) => {
    * Re-attach a reconnected socket to its session. The token proves the caller
    * is the same participant, so a new socket id does not lose the transfer.
    */
-  socket.on("rejoin", (payload, ack) => {
+  socket.on("rejoin", async (payload, ack) => {
     if (typeof ack !== "function") return;
     const { sessionId, token, role } = payload || {};
     if (typeof sessionId !== "string" || typeof token !== "string") {
@@ -340,6 +456,7 @@ io.on("connection", (socket) => {
       file: s.file,
       peerDevice: peer ? peer.device : null,
       peerOnline,
+      iceServers: await getIceServers(),
     });
 
     // The sender is always the offerer, so a receiver coming back asks it to
@@ -397,5 +514,10 @@ server.listen(PORT, "0.0.0.0", () => {
     ALLOWED.length
       ? `Allowed origins: ${ALLOWED.join(", ")}`
       : "ALLOWED_ORIGINS unset — accepting any origin (fine for local dev).",
+  );
+  console.log(
+    turnMode === "none"
+      ? "No TURN configured — transfers need a direct path (same network or hotspot)."
+      : `TURN: ${turnMode}. Relay is a fallback; direct paths are still preferred.`,
   );
 });

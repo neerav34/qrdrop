@@ -12,7 +12,8 @@
     "test:signal": "node test/signal.test.mjs",
     "test:e2e": "node test/e2e.test.mjs",
     "test:coldstart": "node test/coldstart.test.mjs",
-    "test:origins": "node test/origins.test.mjs"
+    "test:origins": "node test/origins.test.mjs",
+    "test:turn": "node test/turn.test.mjs"
   },
   "dependencies": {
     "html5-qrcode": "^2.3.8",
