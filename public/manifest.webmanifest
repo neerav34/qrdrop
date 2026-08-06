@@ -1,17 +1,37 @@
 {
-  "name": "QRDrop",
+  "name": "QRDrop — send files instantly",
   "short_name": "QRDrop",
-  "description": "Send files device-to-device by scanning a QR code. No upload, no account.",
+  "description": "Send files between any two devices by scanning a QR code. Peer-to-peer, no upload, no account.",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#070b14",
-  "theme_color": "#070b14",
+  "orientation": "portrait",
+  "background_color": "#06090f",
+  "theme_color": "#06090f",
+  "categories": ["utilities", "productivity"],
   "icons": [
     {
-      "src": "/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
+  ],
+  "shortcuts": [
+    { "name": "Send a file", "url": "/send" },
+    { "name": "Receive a file", "url": "/receive" }
   ]
 }

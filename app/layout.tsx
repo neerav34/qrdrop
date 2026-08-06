@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import Prewarm from "@/components/Prewarm";
+import ServiceWorker from "@/components/ServiceWorker";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -7,6 +8,18 @@ export const metadata: Metadata = {
   description:
     "Scan a QR code and transfer files device-to-device over an encrypted peer-to-peer connection. No cloud, no account, no install.",
   manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "QRDrop",
+    statusBarStyle: "black-translucent",
+  },
+  icons: {
+    icon: [
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export const viewport: Viewport = {
@@ -36,6 +49,7 @@ export default function RootLayout({
           <span />
         </div>
         <Prewarm />
+        <ServiceWorker />
         {children}
       </body>
     </html>

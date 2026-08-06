@@ -14,7 +14,8 @@
     "test:coldstart": "node test/coldstart.test.mjs",
     "test:origins": "node test/origins.test.mjs",
     "test:turn": "node test/turn.test.mjs",
-    "test:relay": "node test/relay.test.mjs"
+    "test:relay": "node test/relay.test.mjs",
+    "test:pwa": "node test/pwa.test.mjs"
   },
   "dependencies": {
     "html5-qrcode": "^2.3.8",

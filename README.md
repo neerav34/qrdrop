@@ -87,6 +87,11 @@ npm run test:e2e         # drives two real Chrome tabs: a 3 MB transfer verified
                          # mid-flight and must resume and still match by sha256
 RESUME_RUNS=5 npm run test:e2e   # repeat the resume scenario to shake out races
 
+npm run build && npm run start   # production, in one terminal
+npm run test:pwa         # manifest, real PNG icons at declared sizes, worker
+                         # registering and activating, and the UI still opening
+                         # with the network cut off via CDP
+
 npm run dev              # signal server NOT running
 npm run test:coldstart   # points the page at a dead signaling server: must wait
                          # rather than fail, then recover once it answers
@@ -107,7 +112,7 @@ E2E_URL=https://qrdrop-seven.vercel.app npm run test:relay
                          # spends relay quota, so it is opt-in.
 ```
 
-All suites pass on the current tree (28 signal + 14 origins + 18 e2e + 4 cold-start + 16 TURN + 6 relay against live). Leave a minute between
+All suites pass on the current tree (28 signal + 14 origins + 18 e2e + 4 cold-start + 16 TURN + 16 PWA + 6 relay against live). Leave a minute between
 them — the signal suite deliberately trips the 10-sessions-per-IP-per-minute
 limit, which would otherwise refuse the e2e run's own session. And don't run
 `next build` while `next dev` is live; they share `.next`.
@@ -139,6 +144,33 @@ takes 30–60 seconds. Every page pings `/healthz` on load
 still choosing a file, and a failed first connection is treated as "still
 waking", not as an error — the client retries for ~80 seconds and says so.
 `npm run test:coldstart` guards that behaviour.
+
+## Installable, and useful offline
+
+The app is a real PWA: Android offers *Install*, iOS *Add to Home Screen*, and it
+launches fullscreen with no browser chrome. Chrome only offers to install when the
+criteria are genuinely met, which is why [components/InstallButton.tsx](components/InstallButton.tsx)
+renders nothing until `beforeinstallprompt` fires — the button appearing is itself
+proof the manifest, icons and worker are all in order.
+
+[public/sw.js](public/sw.js) is deliberately conservative, because a service
+worker is the easiest way to brick your own deployment:
+
+- **Navigations are network-first.** A cached HTML shell that references chunk
+  hashes from a previous build is the classic self-inflicted outage, so the
+  network always wins when it can and the cache is only an offline fallback.
+- **Only `/_next/static/*` is cache-first**, since those filenames carry a
+  content hash and can never change meaning.
+- **Cross-origin requests are untouched.** Signalling lives on another origin and
+  must never be intercepted or cached.
+- **No `skipWaiting()`.** A new worker seizing control mid-session could hand a
+  running page assets from a different build, and a transfer in flight is exactly
+  the wrong moment. Updates apply on the next visit.
+
+`npm run test:pwa` checks all of that plus the real thing: it cuts the network
+with CDP and asserts the UI still opens. The transfer suite was also re-run
+against a production build with the worker active, to confirm it doesn't
+interfere with a transfer.
 
 ## A note on the animation layer
 

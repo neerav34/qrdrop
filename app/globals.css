@@ -317,6 +317,30 @@ a {
   margin: 0;
 }
 
+/* Only rendered when the browser says the app is genuinely installable. */
+.install-btn {
+  appearance: none;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: 13px;
+  padding: 9px 16px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: border-color 0.18s var(--ease), color 0.18s var(--ease);
+}
+.install-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.install-btn svg {
+  color: var(--accent);
+}
+
 /* ==================================================== device link */
 
 .dl {
