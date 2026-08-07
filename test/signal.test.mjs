@@ -222,6 +222,57 @@ await new Promise((r) => setTimeout(r, 150));
 const gone = await emit(await connect(), "join", lonelySession.sessionId);
 ok("never-accepted session dropped on disconnect", !!gone.error);
 
+// --------------------------------------------------------------- statistics
+// Counting is only useful if it counts, and only acceptable if it counts nothing
+// identifying.
+{
+  const before = await (await fetch(`${URL}/stats`)).json();
+  const a = await connect();
+  const created4 = await emit(a, "create", {
+    files: [file, { ...file, name: "second.pdf" }],
+    device: laptop,
+  });
+  const b = await connect();
+  await emit(b, "join", created4.sessionId);
+  await emit(b, "accept", { device: phone });
+  b.emit("complete");
+  await new Promise((r) => setTimeout(r, 200));
+  const after = await (await fetch(`${URL}/stats`)).json();
+
+  ok(
+    "a created session is counted",
+    after.sessionsCreated === before.sessionsCreated + 1,
+    `${before.sessionsCreated} -> ${after.sessionsCreated}`,
+  );
+  ok(
+    "files offered are counted",
+    after.filesOffered === before.filesOffered + 2,
+    `${before.filesOffered} -> ${after.filesOffered}`,
+  );
+  ok(
+    "a completed transfer is counted",
+    after.sessionsCompleted === before.sessionsCompleted + 1,
+    `${before.sessionsCompleted} -> ${after.sessionsCompleted}`,
+  );
+  ok(
+    "declared bytes are counted",
+    after.bytesOffered === before.bytesOffered + file.size * 2,
+  );
+  ok("a completion rate is reported", typeof after.completionRate === "number");
+  // The whole point is that this is safe to expose.
+  const body = JSON.stringify(after);
+  ok(
+    "no filenames leak into the stats",
+    !body.includes("report.pdf") && !body.includes("second.pdf"),
+  );
+  ok(
+    "no session ids leak into the stats",
+    !body.includes(created4.sessionId),
+  );
+  a.disconnect();
+  b.disconnect();
+}
+
 // ------------------------------------------------------------- rate limiting
 let limitHitAt = null;
 for (let i = 0; i < 14; i++) {

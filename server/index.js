@@ -236,11 +236,51 @@ app.get("/healthz", (_req, res) =>
   res.json({ ok: true, sessions: sessions.size, turn: turnMode }),
 );
 
+app.get("/stats", (_req, res) => {
+  const uptimeHours = (Date.now() - stats.since) / 3_600_000;
+  res.json({
+    ...stats,
+    live: sessions.size,
+    uptimeHours: Number(uptimeHours.toFixed(2)),
+    completionRate: stats.sessionsCreated
+      ? Number((stats.sessionsCompleted / stats.sessionsCreated).toFixed(3))
+      : null,
+    note:
+      "Aggregate totals only — no IPs, filenames or per-session records. " +
+      "bytesOffered is what senders declared; the server never sees file bytes. " +
+      "Resets when the process restarts.",
+  });
+});
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: originCheck, methods: ["GET", "POST"] },
   maxHttpBufferSize: MAX_SIGNAL_BYTES,
 });
+
+/**
+ * Aggregate counters, so "did anyone actually use it?" has an answer.
+ *
+ * Deliberately nothing identifying: no IPs, no filenames, no timestamps per
+ * session, nothing that could be tied back to a person or a transfer. Totals
+ * only. `bytesOffered` is the size senders *declared* — the server never sees a
+ * single file byte, so it cannot measure what actually moved.
+ *
+ * These live in memory, so they reset on restart, and a free-tier host that
+ * sleeps when idle restarts often. `since` says how far back the numbers go.
+ */
+const stats = {
+  since: Date.now(),
+  sessionsCreated: 0,
+  sessionsCompleted: 0,
+  sessionsCancelled: 0,
+  sessionsExpired: 0,
+  pinProtected: 0,
+  pinLockouts: 0,
+  filesOffered: 0,
+  bytesOffered: 0,
+  peakConcurrent: 0,
+};
 
 /** sessionId -> session. In memory only; wiped on completion or expiry. */
 const sessions = new Map();
@@ -378,11 +418,13 @@ setInterval(() => {
     const inFlight = s.status === "transferring" && (senderHere || receiverHere);
 
     if (age > MAX_ACTIVE_LIFETIME_MS || (age > MAX_LIFETIME_MS && !inFlight)) {
+      if (!s.counted) { s.counted = true; stats.sessionsExpired += 1; }
       destroy(id, "expired");
       continue;
     }
     // An unscanned QR code goes stale on the schedule the sender was shown.
     if (s.status === "waiting" && age > WAITING_TTL_MS) {
+      if (!s.counted) { s.counted = true; stats.sessionsExpired += 1; }
       destroy(id, "expired");
       continue;
     }
@@ -395,6 +437,7 @@ setInterval(() => {
       now - senderOff > RESUME_GRACE_MS &&
       now - receiverOff > RESUME_GRACE_MS
     ) {
+      if (!s.counted) { s.counted = true; stats.sessionsExpired += 1; }
       destroy(id, "expired");
     }
   }
@@ -450,6 +493,13 @@ io.on("connection", (socket) => {
       status: "waiting",
     });
     socketSession.set(socket.id, sessionId);
+
+    stats.sessionsCreated += 1;
+    stats.filesOffered += files.length;
+    stats.bytesOffered += total;
+    if (pin) stats.pinProtected += 1;
+    if (sessions.size > stats.peakConcurrent) stats.peakConcurrent = sessions.size;
+
     ack({
       sessionId,
       token,
@@ -522,6 +572,11 @@ io.on("connection", (socket) => {
       const left = MAX_PIN_ATTEMPTS - s.pin.attempts;
       io.to(s.sender.socketId).emit("pin-attempt", { remaining: Math.max(0, left) });
       if (left <= 0) {
+        stats.pinLockouts += 1;
+        if (!s.counted) {
+          s.counted = true;
+          stats.sessionsCancelled += 1;
+        }
         destroy(sessionId, "pin-locked");
         return ack({ error: "Too many wrong PINs. This transfer has been cancelled." });
       }
@@ -633,13 +688,24 @@ io.on("connection", (socket) => {
     if (!s) return;
     const side = sideOf(s, socket.id);
     const peer = peerSocketOf(s, socket.id);
+    if (!s.counted) {
+      s.counted = true;
+      stats.sessionsCancelled += 1;
+    }
     destroy(sessionId, null);
     if (peer) io.to(peer).emit("peer-cancelled", { by: side });
   });
 
   socket.on("complete", () => {
     const sessionId = socketSession.get(socket.id);
-    if (sessionId) destroy(sessionId, null);
+    if (!sessionId) return;
+    const s = sessions.get(sessionId);
+    // Both peers report completion; count the transfer once.
+    if (s && !s.counted) {
+      s.counted = true;
+      stats.sessionsCompleted += 1;
+    }
+    destroy(sessionId, null);
   });
 
   socket.on("disconnect", () => {

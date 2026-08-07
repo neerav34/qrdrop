@@ -37,7 +37,7 @@ Receiver scans it ────────────┘
 | [components/DeviceLink.tsx](components/DeviceLink.tsx) | The two-device visual — the live state of the link |
 | [public/sw.js](public/sw.js) | Service worker, deliberately narrow so it cannot serve a stale build |
 | [server/](server/) | Socket.io signalling — relays SDP/ICE, mints TURN credentials, holds no files |
-| [test/](test/) | 9 suites, 165 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
+| [test/](test/) | 9 suites, 172 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: build plus every suite that needs no credentials |
 
 ## Run it locally
@@ -292,6 +292,27 @@ code has to survive being read by a phone camera in one pass, and a wash over
 the modules costs contrast for no real gain.
 
 Everything respects `prefers-reduced-motion`.
+
+## Is anyone using it?
+
+The app collects nothing about users, so the only honest place to count is the
+signalling server, which already creates every session. `GET /stats` returns
+aggregate totals:
+
+```
+sessionsCreated · sessionsCompleted · sessionsCancelled · sessionsExpired
+pinProtected · pinLockouts · filesOffered · bytesOffered · peakConcurrent
+```
+
+Deliberately nothing identifying — no IPs, no filenames, no per-session records,
+no cookies, no third-party script. `bytesOffered` is what senders *declared*,
+because the server never sees a file byte and so cannot measure what moved. The
+signal suite asserts that neither filenames nor session ids appear in the
+response.
+
+The numbers live in memory and reset when the process restarts, which on a
+free tier that sleeps when idle is often. `since` and `uptimeHours` say how far
+back they go; an uptime pinger makes them meaningful.
 
 ## Security notes
 
