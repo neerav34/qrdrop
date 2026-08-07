@@ -34,8 +34,24 @@ const PORT = (() => {
 })();
 const WAITING_TTL_MS = 10 * 60 * 1000; // unscanned QR code lifetime
 const RESUME_GRACE_MS = 2 * 60 * 1000; // how long a half-dead transfer is held
-const MAX_LIFETIME_MS = 60 * 60 * 1000; // hard ceiling on any session
-const SWEEP_MS = 15 * 1000;
+/*
+ * Two ceilings, because one is not enough.
+ *
+ * The first reaps a session that is sitting around not moving data. The second
+ * is an absolute backstop against a leak. A single 60-minute ceiling killed
+ * transfers that were still healthily running — rare on a fast LAN, where an
+ * hour is tens of gigabytes, but reachable on weak Wi-Fi, and easily reachable
+ * by a transfer that keeps pausing while a phone sleeps, since the ceiling
+ * counts wall-clock time rather than time spent transferring.
+ *
+ * Overridable so the sweep can be tested without waiting an hour.
+ */
+const MAX_LIFETIME_MS = Number(process.env.SESSION_MAX_LIFETIME_MS || 60 * 60 * 1000);
+const MAX_ACTIVE_LIFETIME_MS = Number(
+  process.env.SESSION_MAX_ACTIVE_LIFETIME_MS || 6 * 60 * 60 * 1000,
+);
+// Overridable alongside the ceilings above, so the sweep is testable in seconds.
+const SWEEP_MS = Number(process.env.SESSION_SWEEP_MS || 15 * 1000);
 const MAX_SESSIONS_PER_IP_PER_MIN = 10;
 const MAX_NAME_LEN = 260;
 const MAX_FILES = 100; // keep in step with MAX_FILES in lib/protocol.ts
@@ -353,7 +369,15 @@ setInterval(() => {
   const now = Date.now();
   for (const [id, s] of sessions) {
     const age = now - s.createdAt;
-    if (age > MAX_LIFETIME_MS) {
+
+    // "Still going" means negotiated and with someone still connected. The
+    // server never sees file bytes, so this is the closest signal it has —
+    // hence the absolute backstop above it.
+    const senderHere = !s.sender.offlineSince;
+    const receiverHere = !!s.receiver && !s.receiver.offlineSince;
+    const inFlight = s.status === "transferring" && (senderHere || receiverHere);
+
+    if (age > MAX_ACTIVE_LIFETIME_MS || (age > MAX_LIFETIME_MS && !inFlight)) {
       destroy(id, "expired");
       continue;
     }

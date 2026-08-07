@@ -301,8 +301,10 @@ Everything respects `prefers-reduced-motion`.
   A rejoin without the matching token is refused.
 - **Single use.** Once a receiver accepts, the session is locked to those two
   peers; a third device scanning the same code is refused. Covered by tests.
-- **Expiry.** An unscanned code dies after 10 minutes, a half-dead transfer after
-  2, and no session outlives an hour. Everything is in a `Map`; nothing is ever
+- **Expiry.** An unscanned code dies after 10 minutes, and a half-dead transfer
+  after 2. Idle sessions are reaped at an hour — but a transfer still in flight is
+  spared, behind a 6-hour absolute backstop, because the original single ceiling
+  killed live transfers on slow links. Everything is in a `Map`; nothing is ever
   written to disk.
 - **Input validation and rate limiting** on the server: file metadata is
   type/length checked, device labels are stripped to safe characters, malformed

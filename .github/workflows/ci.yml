@@ -68,6 +68,11 @@ jobs:
       - name: TURN wiring
         run: npm run test:turn
 
+      # Boots its own servers with the session ceilings shortened, so an hour of
+      # sweep behaviour is exercised in seconds.
+      - name: Session lifetimes
+        run: npm run test:lifetime
+
       - name: Signaling logs on failure
         if: failure()
         run: tail -50 /tmp/signal-4000.log /tmp/signal-4100.log || true
