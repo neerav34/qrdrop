@@ -37,7 +37,7 @@ Receiver scans it ────────────┘
 | [components/DeviceLink.tsx](components/DeviceLink.tsx) | The two-device visual — the live state of the link |
 | [public/sw.js](public/sw.js) | Service worker, deliberately narrow so it cannot serve a stale build |
 | [server/](server/) | Socket.io signalling — relays SDP/ICE, mints TURN credentials, holds no files |
-| [test/](test/) | 8 suites, 152 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
+| [test/](test/) | 9 suites, 165 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: build plus every suite that needs no credentials |
 
 ## Run it locally
@@ -134,6 +134,9 @@ built to expect that rather than hope it doesn't happen:
   connection attempt that doesn't complete in 10 seconds is retried on our
   schedule rather than waiting on ICE's.
 - **Closing the tab warns you** while a transfer is in flight.
+- **Cancelling says so.** Either side can stop a transfer, and the peer is told it
+  was a decision rather than left waiting out the resume window for someone who
+  has already walked away. The receiver discards whatever partial data arrived.
 
 Verified end-to-end: the resume test kills a live link mid-file and checks the
 received file's sha256 against the source, so a duplicated or dropped chunk at

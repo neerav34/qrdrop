@@ -32,6 +32,24 @@ const sha = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
 const skip = (name, why) => console.log(`  ~ ${name} — SKIPPED: ${why}`);
 
 /**
+ * Fire a button's handler through the DOM rather than via puppeteer's element
+ * click. During an active transfer the element-handle path — scroll-into-view,
+ * clickable-point, stability checks — hangs indefinitely on this page, while a
+ * plain `.click()` returns in ~10ms and the page stays responsive throughout
+ * (measured: 3-19ms per evaluate mid-transfer). The app is not the problem, so
+ * don't let the harness pretend it is.
+ */
+async function domClick(page, selector) {
+  const result = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return `no element matching ${sel}`;
+    el.click();
+    return "ok";
+  }, selector);
+  if (result !== "ok") throw new Error(`domClick: ${result}`);
+}
+
+/**
  * The drop hook only exists in development builds, so resume scenarios cannot run
  * against a production deployment. Saying so is the point: calling the missing
  * hook is a silent no-op, and a scenario that reports success without having cut
@@ -478,6 +496,60 @@ try {
       const buf = fs.readFileSync(got);
       check("and matches its source by sha256", sha(buf) === payload.hash);
     }
+    await Promise.all([send.close(), recv.close()]);
+  }
+  // ============================== 6. cancelling, from either side
+  log("\n▸ scenario 6 — cancelling mid-transfer, both directions");
+  {
+    // Sender cancels: the receiver must be told it was deliberate, not left
+    // waiting out the resume window for a peer that is never coming back.
+    const payload = makePayload("cancel-me.bin", 40 * 1024 * 1024);
+    const { page: send, url } = await openSender(payload.file, "s6a");
+    const recv = await openReceiver(url, path.join(WORK, "dl6a"), "s6a");
+    await (await recv.waitForSelector(".btn.primary", { timeout: 20000 })).click();
+    await recv.waitForFunction(() => {
+      const el = document.querySelector(".pct");
+      return el && parseInt(el.textContent, 10) > 3;
+    }, { timeout: 60000 });
+
+    await domClick(send, ".back");
+    const sawCancel = await recv
+      .waitForFunction(
+        () => document.body.innerText.includes("sender cancelled"),
+        { timeout: 15000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    check("the receiver is told the sender cancelled", sawCancel);
+    const text = await recv.evaluate(() => document.body.innerText);
+    check(
+      "and is NOT told to wait for a sleeping phone",
+      !/went to sleep|Waiting for it/.test(text),
+      "that message would mean a 2-minute wait for nothing",
+    );
+    await Promise.all([send.close(), recv.close()]);
+  }
+  {
+    // Receiver cancels: the sender must hear about it.
+    const payload = makePayload("cancel-me-2.bin", 40 * 1024 * 1024);
+    const { page: send, url } = await openSender(payload.file, "s6b");
+    const recv = await openReceiver(url, path.join(WORK, "dl6b"), "s6b");
+    await (await recv.waitForSelector(".btn.primary", { timeout: 20000 })).click();
+    await recv.waitForFunction(() => {
+      const el = document.querySelector(".pct");
+      return el && parseInt(el.textContent, 10) > 3;
+    }, { timeout: 60000 });
+
+    check("the receiver has a way to stop it", !!(await recv.$(".back")), "was missing entirely before");
+    await domClick(recv, ".back");
+    const stopped = await recv
+      .waitForFunction(() => document.body.innerText.includes("Transfer stopped"), { timeout: 15000 })
+      .then(() => true).catch(() => false);
+    check("the receiver confirms it stopped", stopped);
+    const senderTold = await send
+      .waitForFunction(() => document.body.innerText.includes("receiver cancelled"), { timeout: 15000 })
+      .then(() => true).catch(() => false);
+    check("the sender is told the receiver cancelled", senderTold);
     await Promise.all([send.close(), recv.close()]);
   }
 } catch (e) {

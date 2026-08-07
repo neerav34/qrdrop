@@ -52,6 +52,7 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
 
   const handle = useRef<ReceiverHandle | null>(null);
   const urls = useRef<string[]>([]);
@@ -109,6 +110,27 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
   const to = { device: me, you: true };
   const count = manifest?.length ?? 0;
   const totalSize = manifest?.reduce((n, f) => n + f.size, 0) ?? 0;
+
+  if (cancelled) {
+    return (
+      <main className="shell">
+        <div className="panel">
+          <div className="card">
+            <DeviceLink from={from} to={to} state="idle" pct={0} />
+            <div className="file-line">
+              <div className="file-name">Transfer stopped</div>
+              <div className="file-size">
+                Anything already received has been discarded.
+              </div>
+            </div>
+            <Link className="btn wide" href="/">
+              Back to start
+            </Link>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   // Fatal before anything arrived — offer a way back rather than a dead end.
   if (error && !saved.length) {
@@ -279,9 +301,25 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
     );
   }
 
+  const busy =
+    status === "linking" || status === "receiving" || status === "paused";
+
   return (
     <main className="shell">
       <div className="panel">
+        {busy && (
+          <div className="topbar">
+            <button
+              className="back"
+              onClick={() => {
+                handle.current?.cancel();
+                setCancelled(true);
+              }}
+            >
+              ← Stop transfer
+            </button>
+          </div>
+        )}
         <div className="card">
           <DeviceLink from={from} to={to} state={linkState} pct={pct} />
 

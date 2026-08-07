@@ -167,7 +167,11 @@ export type SenderStatus =
   | "paused"
   | "done";
 
-export type SenderHandle = { close: () => void };
+export type SenderHandle = {
+  /** Tell the peer this was deliberate, then tear down. */
+  cancel: () => void;
+  close: () => void;
+};
 
 export type SenderCallbacks = {
   onSession: (sessionId: string, expiresAt: number) => void;
@@ -548,6 +552,10 @@ export function startSender(
     fatal("Too many wrong PINs were entered. This transfer was cancelled.");
   });
 
+  socket.on("peer-cancelled", () => {
+    fatal("The receiver cancelled the transfer.");
+  });
+
   socket.on("signal", async (payload: SignalPayload) => {
     const p = pc;
     if (!p) {
@@ -572,15 +580,23 @@ export function startSender(
     }
   });
 
+  function shutDown() {
+    closed = true;
+    if (deadline) clearTimeout(deadline);
+    if (linkPending) clearTimeout(linkPending);
+    teardownPeer();
+    releaseAwake();
+    socket.disconnect();
+  }
+
   return {
-    close() {
-      closed = true;
-      if (deadline) clearTimeout(deadline);
-      if (linkPending) clearTimeout(linkPending);
-      teardownPeer();
-      releaseAwake();
-      socket.disconnect();
+    cancel() {
+      // Announce it before dropping the socket, so the peer is told this was a
+      // decision rather than left waiting out the resume window.
+      if (!closed && socket.connected) socket.emit("cancel");
+      shutDown();
     },
+    close: shutDown,
   };
 }
 
@@ -601,6 +617,8 @@ export type ReceiverHandle = {
   accept: () => Promise<void>;
   /** Resolves to an error message, or null when the PIN was right. */
   submitPin: (pin: string) => Promise<string | null>;
+  /** Tell the sender this was deliberate, discard partial data, tear down. */
+  cancel: () => void;
   close: () => void;
 };
 
@@ -953,6 +971,10 @@ export function startReceiver(
     pause("Sender's screen went to sleep or switched apps. Waiting for it…");
   });
 
+  socket.on("peer-cancelled", () => {
+    fatal("The sender cancelled the transfer.");
+  });
+
   socket.on("peer-back", () => {
     resumedOk();
     cb.onStatus("linking");
@@ -1089,6 +1111,17 @@ export function startReceiver(
           token = res.token;
         },
       );
+    },
+    cancel() {
+      if (!closed && socket.connected) socket.emit("cancel");
+      closed = true;
+      if (deadline) clearTimeout(deadline);
+      stopNudging();
+      teardownPeer();
+      // Throw away whatever arrived; a half file is worse than none.
+      if (!finished) sink?.abort();
+      releaseAwake();
+      socket.disconnect();
     },
     close() {
       closed = true;

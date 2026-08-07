@@ -160,6 +160,53 @@ ok("sender can rejoin too", !senderRejoin.error, JSON.stringify(senderRejoin));
 ok("sender sees the receiver online", senderRejoin.peerOnline === true);
 ok("receiver told the sender is back", !!(await backP));
 
+// -------------------------------------------------- deliberate cancellation
+// A cancel must be distinguishable from a dropped connection. Told apart wrongly,
+// the peer waits out the whole resume window for someone who has walked away.
+{
+  const a = await connect();
+  const created2 = await emit(a, "create", { files: [file], device: laptop });
+  const b = await connect();
+  await emit(b, "join", created2.sessionId);
+  await emit(b, "accept", { device: phone });
+
+  const gonePromise = waitFor(b, "peer-gone", 900);
+  const cancelPromise = waitFor(b, "peer-cancelled", 1500);
+  a.emit("cancel");
+  const cancelled = await cancelPromise;
+  ok("the peer is told a cancel was deliberate", !!cancelled, JSON.stringify(cancelled));
+  ok(
+    "and it says which side cancelled",
+    cancelled?.by === "sender",
+    JSON.stringify(cancelled?.by),
+  );
+  ok(
+    "the peer is NOT told to sit and wait for a resume",
+    (await gonePromise) === null,
+    "peer-gone would start the 2-minute resume wait",
+  );
+  const after = await emit(await connect(), "join", created2.sessionId);
+  ok("a cancelled session is destroyed", !!after.error, after.error || "still alive");
+  a.disconnect();
+  b.disconnect();
+}
+
+{
+  // The receiver can cancel too, and the sender learns who did it.
+  const a = await connect();
+  const created3 = await emit(a, "create", { files: [file], device: laptop });
+  const b = await connect();
+  await emit(b, "join", created3.sessionId);
+  await emit(b, "accept", { device: phone });
+  const seen = waitFor(a, "peer-cancelled", 1500);
+  b.emit("cancel");
+  const info = await seen;
+  ok("a receiver cancel reaches the sender", !!info);
+  ok("attributed to the receiver", info?.by === "receiver", JSON.stringify(info?.by));
+  a.disconnect();
+  b.disconnect();
+}
+
 // ------------------------------------------------------------- completion
 senderAgain.emit("complete");
 await new Promise((r) => setTimeout(r, 150));

@@ -126,8 +126,11 @@ export default function SendPage() {
     { forceRelay: relayForced(), pin: usePin ?? undefined });
   }, [requirePin]);
 
-  function reset() {
-    handle.current?.close();
+  function reset(announce = false) {
+    // A deliberate cancel must be told to the peer; otherwise they wait out the
+    // whole resume window for someone who has already walked away.
+    if (announce) handle.current?.cancel();
+    else handle.current?.close();
     handle.current = null;
     startedAt.current = 0;
     setFiles(null);
@@ -234,7 +237,10 @@ export default function SendPage() {
     <main className="shell">
       <div className="panel">
         <div className="topbar">
-          <button className="back" onClick={reset}>
+          <button
+            className="back"
+            onClick={() => reset(status !== "done")}
+          >
             ← {status === "done" ? "Send another" : "Cancel"}
           </button>
         </div>
@@ -342,7 +348,7 @@ export default function SendPage() {
           )}
 
           {status === "done" && (
-            <button className="btn primary wide" onClick={reset}>
+            <button className="btn primary wide" onClick={() => reset(false)}>
               Send another file
             </button>
           )}

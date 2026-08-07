@@ -621,6 +621,22 @@ io.on("connection", (socket) => {
     io.to(target).emit("signal", payload);
   });
 
+  /**
+   * A deliberate cancel, which must not look like a dropped connection. Without
+   * this the peer sits through the whole resume window waiting for someone who
+   * has already walked away.
+   */
+  socket.on("cancel", () => {
+    const sessionId = socketSession.get(socket.id);
+    if (!sessionId) return;
+    const s = sessions.get(sessionId);
+    if (!s) return;
+    const side = sideOf(s, socket.id);
+    const peer = peerSocketOf(s, socket.id);
+    destroy(sessionId, null);
+    if (peer) io.to(peer).emit("peer-cancelled", { by: side });
+  });
+
   socket.on("complete", () => {
     const sessionId = socketSession.get(socket.id);
     if (sessionId) destroy(sessionId, null);
