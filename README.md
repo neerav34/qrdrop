@@ -37,7 +37,7 @@ Receiver scans it ────────────┘
 | [components/DeviceLink.tsx](components/DeviceLink.tsx) | The two-device visual — the live state of the link |
 | [public/sw.js](public/sw.js) | Service worker, deliberately narrow so it cannot serve a stale build |
 | [server/](server/) | Socket.io signalling — relays SDP/ICE, mints TURN credentials, holds no files |
-| [test/](test/) | 9 suites, 172 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
+| [test/](test/) | 9 suites, 175 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: build plus every suite that needs no credentials |
 
 ## Run it locally
@@ -296,8 +296,12 @@ Everything respects `prefers-reduced-motion`.
 ## Is anyone using it?
 
 The app collects nothing about users, so the only honest place to count is the
-signalling server, which already creates every session. `GET /stats` returns
-aggregate totals:
+signalling server, which already creates every session. Open
+**`/stats`** in a browser for a readable summary — completion rate, transfers,
+files, peak concurrency — or fetch the same data as JSON from any script. A
+wildcard `Accept` header gets JSON; only a browser gets the page.
+
+`GET /stats` returns aggregate totals:
 
 ```
 sessionsCreated · sessionsCompleted · sessionsCancelled · sessionsExpired

@@ -236,9 +236,9 @@ app.get("/healthz", (_req, res) =>
   res.json({ ok: true, sessions: sessions.size, turn: turnMode }),
 );
 
-app.get("/stats", (_req, res) => {
+function snapshot() {
   const uptimeHours = (Date.now() - stats.since) / 3_600_000;
-  res.json({
+  return {
     ...stats,
     live: sessions.size,
     uptimeHours: Number(uptimeHours.toFixed(2)),
@@ -249,7 +249,92 @@ app.get("/stats", (_req, res) => {
       "Aggregate totals only — no IPs, filenames or per-session records. " +
       "bytesOffered is what senders declared; the server never sees file bytes. " +
       "Resets when the process restarts.",
-  });
+  };
+}
+
+function humanBytes(n) {
+  if (!n) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}
+
+/**
+ * Same numbers, two shapes: a readable page for a browser, JSON for anything
+ * else. Raw JSON is a miserable way to check on your own project from a phone.
+ * Every value below is a number generated here, so there is nothing to escape.
+ */
+app.get("/stats", (req, res) => {
+  const s = snapshot();
+  // JSON is the default; HTML only when the client actually prefers it.
+  // Listing json first matters: curl and fetch send a wildcard Accept header,
+  // which matches html when asked about in isolation, so accepts("html") on
+  // its own would hand an HTML page to every script — including this
+  // project's own test suite. A browser names text/html and still gets the page.
+  const preferred = req.accepts(["json", "html"]);
+  if (preferred !== "html" || req.query.json !== undefined) {
+    return res.json(s);
+  }
+
+  const rate =
+    s.completionRate === null ? "—" : `${Math.round(s.completionRate * 100)}%`;
+  const rows = [
+    ["Transfers completed", s.sessionsCompleted],
+    ["Sessions created", s.sessionsCreated],
+    ["Never scanned (expired)", s.sessionsExpired],
+    ["Cancelled", s.sessionsCancelled],
+    ["Files offered", s.filesOffered],
+    ["Declared volume", humanBytes(s.bytesOffered)],
+    ["PIN-protected", s.pinProtected],
+    ["PIN lockouts", s.pinLockouts],
+    ["Peak concurrent", s.peakConcurrent],
+    ["Live right now", s.live],
+  ];
+
+  res.type("html").send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QRDrop — usage</title>
+<style>
+  :root{color-scheme:dark}
+  body{margin:0;padding:40px 20px;background:#06090f;color:#e9eef8;
+    font:16px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif;
+    display:flex;justify-content:center}
+  main{width:100%;max-width:460px}
+  h1{font-size:19px;font-weight:600;margin:0 0 4px}
+  .sub{color:#5d6d88;font-size:12.5px;margin:0 0 26px}
+  .hero{border:1px solid #1b2740;border-radius:18px;padding:22px;text-align:center;
+    background:linear-gradient(180deg,#0b1220,rgba(11,18,32,.6));margin-bottom:14px}
+  .hero b{display:block;font-size:46px;font-weight:600;color:#00d4ff;
+    letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+  .hero span{color:#8b9bb8;font-size:13px}
+  table{width:100%;border-collapse:collapse}
+  td{padding:9px 2px;border-bottom:1px solid #131c2e;font-size:14px}
+  td:last-child{text-align:right;font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  tr:last-child td{border-bottom:none}
+  .k{color:#8b9bb8}
+  footer{margin-top:22px;color:#5d6d88;font-size:12px;line-height:1.6}
+  a{color:#00d4ff}
+</style></head><body><main>
+  <h1>QRDrop usage</h1>
+  <p class="sub">Counting since this server last restarted — ${s.uptimeHours} hours ago.</p>
+  <div class="hero"><b>${rate}</b><span>of sessions completed a transfer</span></div>
+  <table>${rows
+    .map((r) => `<tr><td class="k">${r[0]}</td><td>${r[1]}</td></tr>`)
+    .join("")}</table>
+  <footer>
+    Aggregate totals only — no IPs, no filenames, no per-session records, no
+    cookies. Declared volume is what senders said they were sending; this server
+    never sees a file byte, so it cannot measure what actually moved.
+    <br><br><a href="?json">Same data as JSON</a>
+  </footer>
+</main></body></html>`);
 });
 
 const server = http.createServer(app);

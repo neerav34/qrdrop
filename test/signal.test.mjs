@@ -269,6 +269,29 @@ ok("never-accepted session dropped on disconnect", !!gone.error);
     "no session ids leak into the stats",
     !body.includes(created4.sessionId),
   );
+  // A wildcard Accept header must get JSON, or every script — this suite
+  // included — silently receives an HTML page instead of data.
+  const wildcard = await fetch(`${URL}/stats`, { headers: { Accept: "*/*" } });
+  ok(
+    "a wildcard Accept header gets JSON",
+    (wildcard.headers.get("content-type") || "").includes("json"),
+    wildcard.headers.get("content-type") || "(none)",
+  );
+  const browserish = await fetch(`${URL}/stats`, {
+    headers: { Accept: "text/html,application/xhtml+xml" },
+  });
+  ok(
+    "a browser gets a readable page",
+    (browserish.headers.get("content-type") || "").includes("html"),
+    browserish.headers.get("content-type") || "(none)",
+  );
+  const forced = await fetch(`${URL}/stats?json`, {
+    headers: { Accept: "text/html" },
+  });
+  ok(
+    "?json overrides the browser page",
+    (forced.headers.get("content-type") || "").includes("json"),
+  );
   a.disconnect();
   b.disconnect();
 }
