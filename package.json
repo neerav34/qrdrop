@@ -17,7 +17,8 @@
     "test:relay": "node test/relay.test.mjs",
     "test:pwa": "node test/pwa.test.mjs",
     "test:pin": "node test/pin.test.mjs",
-    "test:lifetime": "node test/lifetime.test.mjs"
+    "test:lifetime": "node test/lifetime.test.mjs",
+    "test:ratelimit": "node test/ratelimit.test.mjs"
   },
   "dependencies": {
     "html5-qrcode": "^2.3.8",

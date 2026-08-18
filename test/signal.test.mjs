@@ -315,14 +315,25 @@ ok("never-accepted session dropped on disconnect", !!gone.error);
 }
 
 // ------------------------------------------------------------- rate limiting
-let limitHitAt = null;
-for (let i = 0; i < 14; i++) {
-  const c = await connect();
-  const r = await emit(c, "create", { files: [file], device: laptop });
-  if (r.error && limitHitAt === null) limitHitAt = i;
-  c.disconnect();
+// Read the configured allowance rather than assuming it: it was raised from 10
+// to 30 because that bucket is shared by everyone behind one address.
+{
+  const limit = (await (await fetch(`${URL}/stats`, { headers: { Accept: "*/*" } })).json())
+    .rateLimitPerMinute;
+  ok("the server publishes its rate limit", Number.isInteger(limit), String(limit));
+  let limitHitAt = null;
+  for (let i = 0; i < limit + 4; i++) {
+    const c = await connect();
+    const r = await emit(c, "create", { files: [file], device: laptop });
+    if (r.error && limitHitAt === null) limitHitAt = i;
+    c.disconnect();
+  }
+  ok(
+    "rate limit trips",
+    limitHitAt !== null,
+    `limit ${limit}, first refusal at attempt ${limitHitAt}`,
+  );
 }
-ok("rate limit trips", limitHitAt !== null, `first refusal at attempt ${limitHitAt}`);
 
 console.log("\nPASS");
 pass.forEach((p) => console.log("  ✓ " + p));

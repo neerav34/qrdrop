@@ -52,7 +52,18 @@ const MAX_ACTIVE_LIFETIME_MS = Number(
 );
 // Overridable alongside the ceilings above, so the sweep is testable in seconds.
 const SWEEP_MS = Number(process.env.SESSION_SWEEP_MS || 15 * 1000);
-const MAX_SESSIONS_PER_IP_PER_MIN = 10;
+// Raised from 10: a session is a few hundred bytes and expires in ten minutes,
+// while this bucket is shared by everyone behind one address — an office, a
+// university, or a mobile carrier's CGNAT. Being stingy here refuses real people.
+const MAX_SESSIONS_PER_IP_PER_MIN = Number(
+  process.env.MAX_SESSIONS_PER_IP_PER_MIN || 30,
+);
+// HTTP routes are trivial to serve, so this only exists to stop somebody sitting
+// on /stats in a loop. It must comfortably clear one /healthz per page load,
+// which Prewarm sends, plus an uptime pinger.
+const MAX_HTTP_REQ_PER_IP_PER_MIN = Number(
+  process.env.MAX_HTTP_REQ_PER_IP_PER_MIN || 300,
+);
 const MAX_NAME_LEN = 260;
 const MAX_FILES = 100; // keep in step with MAX_FILES in lib/protocol.ts
 const MAX_PIN_ATTEMPTS = 5; // keep in step with lib/protocol.ts
@@ -245,6 +256,14 @@ app.use((_req, res, next) => {
   });
   next();
 });
+
+app.use((req, res, next) => {
+  const ip = clientIp(req.headers, req.socket.remoteAddress);
+  if (overLimit(httpLog, ip, MAX_HTTP_REQ_PER_IP_PER_MIN)) {
+    return res.status(429).type("text").send("Too many requests");
+  }
+  next();
+});
 app.get("/", (_req, res) => res.type("text").send("QRDrop signaling: ok"));
 app.get("/healthz", (_req, res) =>
   res.json({ ok: true, sessions: sessions.size, turn: turnMode }),
@@ -255,6 +274,7 @@ function snapshot() {
   return {
     ...stats,
     live: sessions.size,
+    rateLimitPerMinute: MAX_SESSIONS_PER_IP_PER_MIN,
     uptimeHours: Number(uptimeHours.toFixed(2)),
     completionRate: stats.sessionsCreated
       ? Number((stats.sessionsCompleted / stats.sessionsCreated).toFixed(3))
@@ -387,23 +407,69 @@ const sessions = new Map();
 const socketSession = new Map();
 /** ip -> array of creation timestamps, for the per-minute rate limit. */
 const createLog = new Map();
+/** ip -> timestamps of plain HTTP requests, so /stats can't be sat on. */
+const httpLog = new Map();
+
+/*
+ * Which address to hold responsible.
+ *
+ * The naive version read the *first* entry of X-Forwarded-For, which is exactly
+ * the part a client controls: proxies append to that header, so anybody could
+ * send "X-Forwarded-For: 203.0.113.1" and land in a fresh rate-limit bucket on
+ * every request. Measured against the live deployment, that took the limiter from
+ * refusing 4 of 14 session creations to refusing none.
+ *
+ * Cloudflare fronts this service and *overwrites* CF-Connecting-IP with the true
+ * client address, so a client cannot forge it. That is the primary source.
+ *
+ * Without it, X-Forwarded-For is only usable if we know how many proxies append
+ * to it — the client IP sits that many entries from the *right*. Guessing is
+ * worse than not trying: too few hops trusts the client, too many buckets every
+ * user together and rate-limits the whole world as one. So unless the operator
+ * states the hop count, the header is ignored entirely and the socket address is
+ * used, which cannot be spoofed.
+ */
+// `??` rather than `||` on purpose: TRUSTED_IP_HEADER="" must mean "trust no
+// header at all", and `||` would silently restore the default instead.
+const TRUSTED_IP_HEADER = (
+  process.env.TRUSTED_IP_HEADER ?? "cf-connecting-ip"
+).toLowerCase();
+const TRUSTED_PROXY_HOPS = Number(process.env.TRUSTED_PROXY_HOPS || 0);
 
 function ipOf(socket) {
-  const fwd = socket.handshake.headers["x-forwarded-for"];
-  if (typeof fwd === "string" && fwd.length) return fwd.split(",")[0].trim();
-  return socket.handshake.address;
+  return clientIp(socket.handshake.headers, socket.handshake.address);
 }
 
-function rateLimited(ip) {
+function clientIp(headers, fallback) {
+  const trusted = TRUSTED_IP_HEADER ? headers[TRUSTED_IP_HEADER] : undefined;
+  if (typeof trusted === "string" && trusted.trim()) return trusted.trim();
+
+  if (TRUSTED_PROXY_HOPS > 0) {
+    const fwd = headers["x-forwarded-for"];
+    if (typeof fwd === "string" && fwd.trim()) {
+      const parts = fwd.split(",").map((v) => v.trim()).filter(Boolean);
+      const idx = parts.length - TRUSTED_PROXY_HOPS;
+      if (idx >= 0 && parts[idx]) return parts[idx];
+    }
+  }
+  return fallback;
+}
+
+/** Sliding one-minute window, shared by the session and HTTP limiters. */
+function overLimit(log, key, max) {
   const now = Date.now();
-  const hits = (createLog.get(ip) || []).filter((t) => now - t < 60_000);
-  if (hits.length >= MAX_SESSIONS_PER_IP_PER_MIN) {
-    createLog.set(ip, hits);
+  const hits = (log.get(key) || []).filter((t) => now - t < 60_000);
+  if (hits.length >= max) {
+    log.set(key, hits);
     return true;
   }
   hits.push(now);
-  createLog.set(ip, hits);
+  log.set(key, hits);
   return false;
+}
+
+function rateLimited(ip) {
+  return overLimit(createLog, ip, MAX_SESSIONS_PER_IP_PER_MIN);
 }
 
 /** One file's declared details. Nothing here is trusted for anything but display. */
@@ -540,10 +606,12 @@ setInterval(() => {
       destroy(id, "expired");
     }
   }
-  for (const [ip, hits] of createLog) {
-    const live = hits.filter((t) => now - t < 60_000);
-    if (live.length) createLog.set(ip, live);
-    else createLog.delete(ip);
+  for (const log of [createLog, httpLog]) {
+    for (const [ip, hits] of log) {
+      const live = hits.filter((t) => now - t < 60_000);
+      if (live.length) log.set(ip, live);
+      else log.delete(ip);
+    }
   }
 }, SWEEP_MS).unref?.();
 
@@ -835,6 +903,14 @@ server.listen(PORT, "0.0.0.0", () => {
     ALLOWED.length
       ? `Allowed origins: ${ALLOWED.join(", ")}`
       : "ALLOWED_ORIGINS unset — accepting any origin (fine for local dev).",
+  );
+  console.log(
+    `Limits: ${MAX_SESSIONS_PER_IP_PER_MIN} sessions/IP/min, ` +
+      `${MAX_HTTP_REQ_PER_IP_PER_MIN} HTTP req/IP/min. Client IP from ` +
+      `${TRUSTED_IP_HEADER} when present` +
+      (TRUSTED_PROXY_HOPS > 0
+        ? `, else X-Forwarded-For at ${TRUSTED_PROXY_HOPS} hop(s) from the right.`
+        : ", else the socket address (X-Forwarded-For is not trusted)."),
   );
   console.log(
     turnMode === "none"

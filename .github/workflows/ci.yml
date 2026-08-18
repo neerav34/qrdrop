@@ -73,6 +73,12 @@ jobs:
       - name: Session lifetimes
         run: npm run test:lifetime
 
+      # Boots its own servers per scenario, because sharing one would let the
+      # first scenario fill the bucket and make every later result look refused
+      # for the wrong reason.
+      - name: Rate limiting and client-IP derivation
+        run: npm run test:ratelimit
+
       - name: Signaling logs on failure
         if: failure()
         run: tail -50 /tmp/signal-4000.log /tmp/signal-4100.log || true

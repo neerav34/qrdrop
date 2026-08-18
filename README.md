@@ -37,7 +37,7 @@ Receiver scans it ────────────┘
 | [components/DeviceLink.tsx](components/DeviceLink.tsx) | The two-device visual — the live state of the link |
 | [public/sw.js](public/sw.js) | Service worker, deliberately narrow so it cannot serve a stale build |
 | [server/](server/) | Socket.io signalling — relays SDP/ICE, mints TURN credentials, holds no files |
-| [test/](test/) | 9 suites, 188 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
+| [test/](test/) | 10 suites, 197 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: build plus every suite that needs no credentials |
 
 ## Run it locally
@@ -336,8 +336,19 @@ back they go; an uptime pinger makes them meaningful.
   written to disk.
 - **Input validation and rate limiting** on the server: file metadata is
   type/length checked, device labels are stripped to safe characters, malformed
-  SDP is dropped rather than relayed, and session creation is capped at 10 per IP
-  per minute.
+  SDP is dropped rather than relayed, and session creation is capped per address
+  per minute (30 — the bucket is shared by everyone behind one IP, so a stingy
+  value refuses real people). HTTP routes are capped separately.
+- **The client address is derived carefully**, because the limit is worthless
+  otherwise. Reading the *first* entry of `X-Forwarded-For` — the obvious choice —
+  reads the part a client controls, since proxies append. Against the live
+  deployment that took the limiter from refusing 4 of 14 session creations to
+  refusing none. The address now comes from a header the platform overwrites
+  (`cf-connecting-ip` behind Cloudflare); failing that, from `X-Forwarded-For`
+  counted from the right by a declared number of proxy hops; failing that, from
+  the socket address. A trusted header is only as trustworthy as the proxy that
+  sets it, so pointing `TRUSTED_IP_HEADER` at one your platform does not
+  overwrite reopens the hole — `npm run test:ratelimit` asserts that too.
 - **CORS** is restricted to `ALLOWED_ORIGINS` in production; private-network
   origins are additionally allowed when `NODE_ENV !== "production"`.
 - The receiver sees the file name and size and must press **Accept** before any
