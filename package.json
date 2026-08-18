@@ -34,5 +34,10 @@
     "concurrently": "^9.1.2",
     "puppeteer-core": "^24.43.1",
     "typescript": "^5.7.3"
+  },
+  "overrides": {
+    "postcss": "^8.5.23",
+    "nanoid": "^3.3.18",
+    "sharp": "^0.35.0"
   }
 }

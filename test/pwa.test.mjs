@@ -135,6 +135,44 @@ try {
     });
   }
 
+  // --------------------------------------------------- security headers
+  {
+    const res = await fetch(`${BASE}/send`);
+    const h = (k) => res.headers.get(k) || "";
+    check("nosniff is set", h("x-content-type-options") === "nosniff", h("x-content-type-options"));
+    check(
+      "the site cannot be framed",
+      /frame-ancestors 'none'/.test(h("content-security-policy")) ||
+        h("x-frame-options").toUpperCase() === "DENY",
+      `${h("content-security-policy")} | ${h("x-frame-options")}`,
+    );
+    check(
+      "a referrer policy is set",
+      h("referrer-policy").length > 0,
+      "the /r/<id> path is a bearer token; do not leak it in full",
+    );
+    // The camera must survive the policy, or the QR scanner silently dies.
+    const pp = h("permissions-policy");
+    check("permissions policy still allows the camera", /camera=\(self\)/.test(pp), pp);
+    check("and denies the microphone", /microphone=\(\)/.test(pp), pp);
+    check(
+      "the CSP does not restrict scripts or styles",
+      !/script-src|style-src|default-src/.test(h("content-security-policy")),
+      "a strict policy here would break fonts and the socket; that is a separate change",
+    );
+  }
+
+  // The scanner page must still be able to ask for the camera at all.
+  {
+    const page2 = await browser.newPage();
+    await page2.goto(`${BASE}/receive`, { waitUntil: "networkidle2" });
+    const usable = await page2.evaluate(
+      () => typeof navigator.mediaDevices?.getUserMedia === "function",
+    );
+    check("getUserMedia is still reachable on /receive", usable);
+    await page2.close();
+  }
+
   // ------------------- the worker must never touch the signaling origin
   const swRaw = await (await fetch(`${BASE}/sw.js`)).text();
   const swSource = swRaw

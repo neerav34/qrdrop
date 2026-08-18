@@ -231,6 +231,20 @@ const originCheck = (rawOrigin, callback) => {
 };
 
 const app = express();
+
+// Nothing here needs to advertise the framework, and no response of this
+// server's should ever be framed or content-sniffed. Cheap, and cannot break a
+// JSON API or a stats page.
+app.disable("x-powered-by");
+app.use((_req, res, next) => {
+  res.set({
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "X-Frame-Options": "DENY",
+  });
+  next();
+});
 app.get("/", (_req, res) => res.type("text").send("QRDrop signaling: ok"));
 app.get("/healthz", (_req, res) =>
   res.json({ ok: true, sessions: sessions.size, turn: turnMode }),

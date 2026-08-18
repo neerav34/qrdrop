@@ -37,7 +37,7 @@ Receiver scans it ────────────┘
 | [components/DeviceLink.tsx](components/DeviceLink.tsx) | The two-device visual — the live state of the link |
 | [public/sw.js](public/sw.js) | Service worker, deliberately narrow so it cannot serve a stale build |
 | [server/](server/) | Socket.io signalling — relays SDP/ICE, mints TURN credentials, holds no files |
-| [test/](test/) | 9 suites, 175 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
+| [test/](test/) | 9 suites, 188 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: build plus every suite that needs no credentials |
 
 ## Run it locally
@@ -342,6 +342,20 @@ back they go; an uptime pinger makes them meaningful.
   origins are additionally allowed when `NODE_ENV !== "production"`.
 - The receiver sees the file name and size and must press **Accept** before any
   connection is made.
+- **Response headers**: `frame-ancestors 'none'` so the site can't be framed to
+  trick someone into accepting a transfer, `nosniff`, a `Referrer-Policy` (the
+  `/r/<id>` path *is* a bearer token, so it must not leak in full), and a
+  `Permissions-Policy` denying everything the app never uses — camera stays
+  allowed for same-origin because `/receive` scans with it, and a test asserts
+  that. A full CSP is deliberately **not** set: Google Fonts, the cross-origin
+  socket, `blob:` downloads and Next's inline hydration script give a strict
+  policy several ways to break the app silently, so it deserves its own tested
+  change rather than a hopeful one.
+- **Dependencies**: `npm audit` is clean. Four high advisories (postcss, sharp,
+  nanoid — all transitive through Next, none reachable here: postcss runs at
+  build time on our own CSS, and sharp is only invoked by `next/image`, which
+  this app doesn't use) are pinned to patched versions via `overrides`, which
+  avoids a major Next upgrade.
 
 ## Known limits
 

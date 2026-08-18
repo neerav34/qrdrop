@@ -296,6 +296,24 @@ ok("never-accepted session dropped on disconnect", !!gone.error);
   b.disconnect();
 }
 
+// -------------------------------------------------------- server headers
+{
+  const res = await fetch(`${URL}/healthz`);
+  ok(
+    "the server no longer advertises Express",
+    !res.headers.get("x-powered-by"),
+    res.headers.get("x-powered-by") || "(absent)",
+  );
+  ok("nosniff is set", res.headers.get("x-content-type-options") === "nosniff");
+  ok(
+    "the stats page cannot be framed",
+    /frame-ancestors 'none'/.test(res.headers.get("content-security-policy") || ""),
+  );
+  ok("no referrer is sent", res.headers.get("referrer-policy") === "no-referrer");
+  // Headers must not have broken the payloads themselves.
+  ok("healthz still returns JSON", (await res.json()).ok === true);
+}
+
 // ------------------------------------------------------------- rate limiting
 let limitHitAt = null;
 for (let i = 0; i < 14; i++) {
