@@ -43,9 +43,17 @@ Receiver scans it ────────────┘
 ## INTERNAL
 
 Full internal documentation — every mechanism, the reasoning behind each choice,
-and where it breaks: **[QRDrop Field Manual](https://claude.ai/code/artifact/80547e84-82d5-4cb7-9134-f14387b083d0)**
+the repo map, configuration reference, and where it breaks:
+**[QRDrop Field Manual](https://qrdrop-seven.vercel.app/internal.html)**
 
 Passphrase required. Hint: *Landline*.
+
+The page is served from this project's own domain and depends on nothing else. Its
+body is AES-GCM encrypted under a key derived from the passphrase, so the text is
+genuinely not present in the file — a wrong passphrase fails to decrypt rather
+than being waved through. The plaintext source and the builder live outside the
+repository ([`docs/` is ignored](.gitignore)); committing them would make the
+passphrase decorative.
 
 ## Run it locally
 
