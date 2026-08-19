@@ -40,20 +40,6 @@ Receiver scans it ────────────┘
 | [test/](test/) | 10 suites, 197 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: build plus every suite that needs no credentials |
 
-## INTERNAL
-
-Full internal documentation — every mechanism, the reasoning behind each choice,
-the repo map, configuration reference, and where it breaks:
-**[QRDrop Field Manual](https://qrdrop-seven.vercel.app/internal.html)**
-
-Passphrase required. Hint: *Landline*.
-
-The page is served from this project's own domain and depends on nothing else. Its
-body is AES-GCM encrypted under a key derived from the passphrase, so the text is
-genuinely not present in the file — a wrong passphrase fails to decrypt rather
-than being waved through. The plaintext source and the builder live outside the
-repository ([`docs/` is ignored](.gitignore)); committing them would make the
-passphrase decorative.
 
 ## Run it locally
 
@@ -420,3 +406,19 @@ Deliberately *not* planned: zipping multiple files client-side (the original pla
 called for `jszip`). Streaming them sequentially avoids a 2 GB folder needing to
 exist twice before a byte moves, and gives the receiver their actual files rather
 than an archive to unpack.
+
+
+## INTERNAL
+
+Full internal documentation — every mechanism, the reasoning behind each choice,
+the repo map, configuration reference, and where it breaks:
+**[QRDrop Field Manual](https://qrdrop-seven.vercel.app/internal.html)**
+
+Passphrase required. Hint: *Landline*.
+
+The page is served from this project's own domain and depends on nothing else. Its
+body is AES-GCM encrypted under a key derived from the passphrase, so the text is
+genuinely not present in the file — a wrong passphrase fails to decrypt rather
+than being waved through. The plaintext source and the builder live outside the
+repository ([`docs/` is ignored](.gitignore)); committing them would make the
+passphrase decorative.
