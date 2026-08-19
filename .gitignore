@@ -5,3 +5,6 @@ out
 .DS_Store
 *.tsbuildinfo
 next-env.d.ts
+
+# Internal manual: holds the plaintext + builder, so the gate stays meaningful
+docs/

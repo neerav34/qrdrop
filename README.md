@@ -40,6 +40,13 @@ Receiver scans it ────────────┘
 | [test/](test/) | 10 suites, 197 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: build plus every suite that needs no credentials |
 
+## INTERNAL
+
+Full internal documentation — every mechanism, the reasoning behind each choice,
+and where it breaks: **[QRDrop Field Manual](https://claude.ai/code/artifact/80547e84-82d5-4cb7-9134-f14387b083d0)**
+
+Passphrase required. Hint: *Landline*.
+
 ## Run it locally
 
 ```bash
