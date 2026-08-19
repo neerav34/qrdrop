@@ -142,6 +142,28 @@ function coldStartNotice(attempt: number): string {
     : "Waking up the connection server — free hosting can take up to a minute.";
 }
 
+/**
+ * Announce a deliberate cancel, then tear down — in that order, and confirmed.
+ *
+ * Emitting and immediately disconnecting is a race: socket.io can drop a queued
+ * packet as the connection closes, and over a real network the disconnect
+ * sometimes wins. The peer then sees a plain disconnect and interprets a
+ * deliberate cancel as a dropped connection — sitting through the whole resume
+ * window for somebody who already walked away, which is the exact bug the cancel
+ * message exists to prevent. Waiting for the server's acknowledgement closes it,
+ * with a timeout so a lost ack can never strand the teardown.
+ */
+function announceCancel(socket: Socket, teardown: () => void) {
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    teardown();
+  };
+  socket.emit("cancel", finish);
+  setTimeout(finish, 900);
+}
+
 /** Wait for the send buffer to drain, but never hang if the channel dies. */
 function waitForDrain(ch: RTCDataChannel): Promise<void> {
   return new Promise((resolve) => {
@@ -591,10 +613,8 @@ export function startSender(
 
   return {
     cancel() {
-      // Announce it before dropping the socket, so the peer is told this was a
-      // decision rather than left waiting out the resume window.
-      if (!closed && socket.connected) socket.emit("cancel");
-      shutDown();
+      if (!closed && socket.connected) announceCancel(socket, shutDown);
+      else shutDown();
     },
     close: shutDown,
   };
@@ -1113,15 +1133,21 @@ export function startReceiver(
       );
     },
     cancel() {
-      if (!closed && socket.connected) socket.emit("cancel");
-      closed = true;
-      if (deadline) clearTimeout(deadline);
-      stopNudging();
+      const teardown = () => {
+        closed = true;
+        if (deadline) clearTimeout(deadline);
+        stopNudging();
+        teardownPeer();
+        // Throw away whatever arrived; a half file is worse than none.
+        if (!finished) sink?.abort();
+        releaseAwake();
+        socket.disconnect();
+      };
+      // Stop receiving straight away, but keep the socket alive long enough for
+      // the cancel to be acknowledged.
       teardownPeer();
-      // Throw away whatever arrived; a half file is worse than none.
-      if (!finished) sink?.abort();
-      releaseAwake();
-      socket.disconnect();
+      if (!closed && socket.connected) announceCancel(socket, teardown);
+      else teardown();
     },
     close() {
       closed = true;

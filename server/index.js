@@ -848,11 +848,12 @@ io.on("connection", (socket) => {
    * this the peer sits through the whole resume window waiting for someone who
    * has already walked away.
    */
-  socket.on("cancel", () => {
+  socket.on("cancel", (ack) => {
+    const done = typeof ack === "function" ? ack : () => {};
     const sessionId = socketSession.get(socket.id);
-    if (!sessionId) return;
+    if (!sessionId) return done();
     const s = sessions.get(sessionId);
-    if (!s) return;
+    if (!s) return done();
     const side = sideOf(s, socket.id);
     const peer = peerSocketOf(s, socket.id);
     if (!s.counted) {
@@ -861,6 +862,9 @@ io.on("connection", (socket) => {
     }
     destroy(sessionId, null);
     if (peer) io.to(peer).emit("peer-cancelled", { by: side });
+    // Acknowledge so the canceller knows the message landed before it drops the
+    // socket; otherwise the disconnect can outrun the packet.
+    done();
   });
 
   socket.on("complete", () => {
