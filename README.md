@@ -40,7 +40,7 @@ Receiver scans it ────────────┘
 | [components/RecentTransfers.tsx](components/RecentTransfers.tsx) | The recent-transfers list on the home page |
 | [public/sw.js](public/sw.js) | Service worker, deliberately narrow so it cannot serve a stale build |
 | [server/](server/) | Socket.io signalling — relays SDP/ICE, mints TURN credentials, holds no files |
-| [test/](test/) | 12 suites, 231 checks: protocol, PIN, origins, TURN, session lifetimes, rate limiting, PWA, cold start, history, cross-tab merge, real-Chrome transfers, live relay |
+| [test/](test/) | 13 suites, 271 checks: protocol, PIN, origins, TURN, session lifetimes, rate limiting, PWA, cold start, history, cross-tab merge, text sharing, real-Chrome transfers, live relay |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: build plus every suite that needs no credentials |
 
 
@@ -214,7 +214,7 @@ npm run test:signal      # 56 protocol checks: session lifecycle, resume tokens,
                          # peer-drop notification
 
 npm run dev:all          # in one terminal
-npm run test:e2e         # drives two real Chrome tabs through seven scenarios:
+npm run test:e2e         # drives two real Chrome tabs through nine scenarios:
                          # a 3 MB transfer verified byte-for-byte; a 64 MB one
                          # whose link is cut mid-flight; four files in one
                          # session each checked by sha256; a batch cut after the
@@ -222,7 +222,10 @@ npm run test:e2e         # drives two real Chrome tabs through seven scenarios:
                          # file boundary without duplicating or losing a chunk;
                          # a PIN-gated transfer through the real UI; a cancel,
                          # which must tell the other end rather than look like a
-                         # drop; and a completion recorded in local history
+                         # drop; a completion recorded in local history; a link
+                         # sent as text, which must be shown and *not* land in
+                         # Downloads; and a javascript: URL, which must arrive
+                         # intact as text with nothing clickable offered
 RESUME_RUNS=5 npm run test:e2e   # repeat the resume scenario to shake out races
 
 npm run build && npm run start   # production, in one terminal
@@ -256,6 +259,9 @@ npm run test:history     # seeds storage directly, so it can test values a real
 npm run test:merge       # no server, no browser: imports the history module
                          # with a fake store and fake timers and reproduces the
                          # cross-tab lost update on demand
+npm run test:text        # also serverless: mostly the allow-list deciding what
+                         # received text may become — javascript:, data:, file:,
+                         # scheme-relative and app-scheme URLs all refused
 
 npm run build            # needed by the leak check below
 npm run test:turn        # TURN wiring against a stub provider: credentials
@@ -272,9 +278,10 @@ E2E_URL=https://qrdrop-seven.vercel.app SIGNAL_URL=https://qrdrop-u0kg.onrender.
                          # configured it reports SKIPPED rather than failing.
 ```
 
-**231 checks across 12 suites**, counted on this tree: 56 signalling, 45 browser
-transfers, 23 PWA, 22 PIN, 17 history, 17 cross-tab merge, 16 TURN, 14 origins,
-6 rate limiting, 6 live relay, 5 session lifetimes, 4 cold start. All of them
+**271 checks across 13 suites**, counted on this tree: 59 browser transfers, 56
+signalling, 26 text sharing, 23 PWA, 22 PIN, 17 history, 17 cross-tab merge, 16
+TURN, 14 origins, 6 rate limiting, 6 live relay, 5 session lifetimes, 4 cold
+start. All of them
 passed in one pass except two that cannot run against a development server: the
 service-worker check needs a production build, and the relay suite needs TURN
 credentials — that one was run separately against the live deployment, where it
@@ -291,7 +298,7 @@ own session. And don't run `next build` while `next dev` is live; they share
 split by what they need:
 
 - **Build + protocol suites** — `next build` (which is also the typecheck), then
-  the seven suites that need neither a browser nor credentials. Fast, and the one
+  the eight suites that need neither a browser nor credentials. Fast, and the one
   that should gate a merge. It boots the signaling server twice on separate ports
   because the signal suite deliberately trips the per-IP rate limit, which would
   otherwise leave the PIN suite refused for the following minute; the lifetime and
