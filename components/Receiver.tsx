@@ -9,6 +9,7 @@ import { useExitGuard } from "@/lib/hooks";
 import { relayForced } from "@/lib/relayFlag";
 import { addHistory } from "@/lib/history";
 import { PIN_LENGTH } from "@/lib/protocol";
+import { isTextPayload, safeExternalUrl } from "@/lib/text";
 import {
   startReceiver,
   type Progress,
@@ -54,6 +55,9 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
   const [pinError, setPinError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [cancelled, setCancelled] = useState(false);
+  /** Set only for a single small text payload, which is shown rather than saved. */
+  const [received, setReceived] = useState<string | null>(null);
+  const [copied, setCopied] = useState<"ok" | "failed" | null>(null);
 
   const handle = useRef<ReceiverHandle | null>(null);
   const urls = useRef<string[]>([]);
@@ -96,6 +100,16 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
           const url = URL.createObjectURL(file.blob);
           urls.current.push(url);
           setSaved((prev) => [...prev, { ...file, url }]);
+
+          // A snippet or a link is meant to be read, not filed. Downloading it
+          // would leave a stray note.txt in the receiver's Downloads folder and
+          // hide the one thing they actually wanted. It is still saveable from
+          // the button on the completion screen.
+          if (isTextPayload(file.meta)) {
+            file.blob.text().then(setReceived, () => setReceived(null));
+            return;
+          }
+
           // Offer it straight away. Browsers may block the second and later
           // automatic downloads in a batch, which is why the list below always
           // keeps an explicit Save button for every file.
@@ -167,6 +181,19 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
     );
   }
 
+  const copy = async () => {
+    if (received === null) return;
+    try {
+      // Unavailable on an insecure origin, and it can be refused outright, so
+      // the failure has to be visible rather than a button that does nothing.
+      await navigator.clipboard.writeText(received);
+      setCopied("ok");
+      setTimeout(() => setCopied(null), 2200);
+    } catch {
+      setCopied("failed");
+    }
+  };
+
   const fileList = manifest && count > 1 && (
     <ul className="filelist">
       {manifest.map((f, i) => {
@@ -199,6 +226,17 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
 
   if (complete) {
     const downloadable = saved.filter((s) => s.url);
+    // Text arrived from another device, so what it is allowed to become is
+    // decided by one narrow check shared with the sender. See lib/text.ts.
+    const link = received !== null ? safeExternalUrl(received) : null;
+    const label =
+      received !== null
+        ? link
+          ? "Link received"
+          : "Text received"
+        : count === 1
+          ? saved[0]?.meta.name
+          : `${count} files received`;
     return (
       <main className="shell">
         <div className="panel">
@@ -210,9 +248,7 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
               </svg>
             </div>
             <div className="file-line">
-              <div className="file-name">
-                {count === 1 ? saved[0]?.meta.name : `${count} files received`}
-              </div>
+              <div className="file-name">{label}</div>
               <div className="file-size">
                 {bytes(totalSize)} ·{" "}
                 {target.kind === "disk"
@@ -220,6 +256,38 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
                   : "transfer complete"}
               </div>
             </div>
+
+            {received !== null && (
+              <div className="textout">
+                {/* Rendered as text, never as markup — this came off the wire. */}
+                <pre className="text-received">{received}</pre>
+                <div className="text-actions">
+                  <button className="btn" onClick={copy}>
+                    {copied === "ok"
+                      ? "Copied"
+                      : copied === "failed"
+                        ? "Copy blocked"
+                        : "Copy"}
+                  </button>
+                  {link && (
+                    <a
+                      className="btn primary"
+                      href={link}
+                      target="_blank"
+                      rel="noopener noreferrer nofollow"
+                    >
+                      Open link
+                    </a>
+                  )}
+                </div>
+                {copied === "failed" && (
+                  <p className="footnote">
+                    Your browser would not let the page write to the clipboard.
+                    Select the text above and copy it.
+                  </p>
+                )}
+              </div>
+            )}
 
             {fileList}
 
@@ -232,17 +300,21 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
               <>
                 {downloadable.length === 1 && downloadable[0].url && (
                   <a
-                    className="btn primary wide"
+                    // Text already has its own actions; a second bright button
+                    // would compete with the one they came here for.
+                    className={received !== null ? "btn wide" : "btn primary wide"}
                     href={downloadable[0].url}
                     download={downloadable[0].meta.name}
                   >
-                    Save file
+                    {received !== null ? "Save as a file" : "Save file"}
                   </a>
                 )}
                 <p className="footnote">
-                  {downloadable.length > 1
-                    ? "Your browser may have asked before saving several files at once. Use the Save links above for anything it skipped."
-                    : "If your browser did not save it automatically, use the button above."}{" "}
+                  {received !== null
+                    ? "Nothing was saved to your device — it is only on this page. Copy it, or use Save below to keep the file."
+                    : downloadable.length > 1
+                      ? "Your browser may have asked before saving several files at once. Use the Save links above for anything it skipped."
+                      : "If your browser did not save it automatically, use the button above."}{" "}
                   Leaving this page discards anything unsaved.
                 </p>
               </>
