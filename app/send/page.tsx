@@ -9,6 +9,7 @@ import { bytes, clock, eta, pathLabel, rate } from "@/lib/format";
 import { useExitGuard } from "@/lib/hooks";
 import { relayForced } from "@/lib/relayFlag";
 import { formatPin, generatePin } from "@/lib/pin";
+import { TEXT_MAX_BYTES, safeExternalUrl, textBytes, textToFile } from "@/lib/text";
 import { addHistory } from "@/lib/history";
 import {
   startSender,
@@ -53,6 +54,8 @@ export default function SendPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [textMode, setTextMode] = useState(false);
+  const [text, setText] = useState("");
   const [copied, setCopied] = useState(false);
   const [origin, setOrigin] = useState("");
   const [me, setMe] = useState<DeviceInfo | null>(null);
@@ -150,6 +153,9 @@ export default function SendPage() {
     startedAt.current = 0;
     recorded.current = false;
     setFiles(null);
+    // The snippet has already been sent; leaving it in the box invites sending
+    // it twice. The mode stays, since that is probably still what they want.
+    setText("");
     setSessionId(null);
     setExpiresAt(0);
     setStatus("connecting");
@@ -184,6 +190,12 @@ export default function SendPage() {
 
   // ---------------------------------------------------------------- picker
   if (!files) {
+    const typedBytes = textBytes(text);
+    const tooLong = typedBytes > TEXT_MAX_BYTES;
+    const sendText = () => {
+      if (!text.trim() || tooLong) return;
+      begin([textToFile(text)]);
+    };
     return (
       <main className="shell">
         <div className="panel">
@@ -192,7 +204,38 @@ export default function SendPage() {
               ← Back
             </Link>
           </div>
-          <h2>Pick files to send</h2>
+          <h2>{textMode ? "Send text or a link" : "Pick files to send"}</h2>
+          {textMode ? (
+            <div className="textbox">
+              <textarea
+                className="text-input"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  // Enter belongs to the textarea; the shortcut needs a modifier.
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendText();
+                }}
+                placeholder="Paste a link, or type anything you want on the other device"
+                rows={5}
+                autoFocus
+                spellCheck={false}
+              />
+              <div className="text-foot">
+                <span className={tooLong ? "text-count over" : "text-count"}>
+                  {tooLong
+                    ? `${bytes(typedBytes)} — longer than ${bytes(TEXT_MAX_BYTES)}, send it as a file instead`
+                    : `${bytes(typedBytes)} of ${bytes(TEXT_MAX_BYTES)}`}
+                </span>
+                <button
+                  className="btn primary"
+                  onClick={sendText}
+                  disabled={!text.trim() || tooLong}
+                >
+                  {safeExternalUrl(text) ? "Send link" : "Send text"}
+                </button>
+              </div>
+            </div>
+          ) : (
           <div
             className={dragging ? "drop over" : "drop"}
             onClick={() => input.current?.click()}
@@ -215,6 +258,17 @@ export default function SendPage() {
             <strong>Choose files</strong>
             or drop them here
           </div>
+          )}
+
+          <button
+            className="switch-mode"
+            onClick={() => {
+              setTextMode((m) => !m);
+              setError(null);
+            }}
+          >
+            {textMode ? "Send a file instead" : "Or send text or a link"}
+          </button>
           <input
             ref={input}
             type="file"
@@ -239,9 +293,9 @@ export default function SendPage() {
           </label>
 
           <p className="footnote">
-            Any file type, any size, as many as you like. Both devices stay on
-            the page until the transfer finishes — if one drops out, it picks up
-            from the file and byte it stopped at.
+            {textMode
+              ? "It travels as a small text file, over the same encrypted path as everything else. The other device shows it on screen and can copy it — nothing is saved unless they choose to."
+              : "Any file type, any size, as many as you like. Both devices stay on the page until the transfer finishes — if one drops out, it picks up from the file and byte it stopped at."}
           </p>
         </div>
       </main>
