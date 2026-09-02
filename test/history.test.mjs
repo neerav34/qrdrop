@@ -1,8 +1,11 @@
 /**
  * Local transfer history — the failure modes, not the happy path.
  *
- *   npm run dev        (in one terminal)
+ *   npm run dev  (or npm run build && npm run start)
  *   npm run test:history
+ *
+ * Works against either server — nothing here depends on a development build. CI
+ * runs it against the production one, which is why that was verified too.
  *
  * The happy path is covered by the browser transfer suite, which completes a real
  * transfer and checks it appears. What matters here is that history can never
