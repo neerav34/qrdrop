@@ -38,6 +38,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Needs no server and no browser: it imports the history module directly
+      # and drives the cross-tab lost update with a fake store and fake timers.
+      - name: History merge
+        run: npm run test:merge
+
       # Two servers on separate ports, because the signal suite deliberately
       # trips the per-IP rate limit — sharing one process would leave the PIN
       # suite refused for the following minute.
