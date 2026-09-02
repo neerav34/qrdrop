@@ -449,8 +449,6 @@ back they go; an uptime pinger makes them meaningful.
 
 Optional, and none of it changes what the tool does:
 
-- **Transfer history** — last few transfers in `localStorage` (names and sizes
-  only, never files).
 - **Text and link sharing** — paste a URL or a snippet instead of picking a file.
 - **Cross-network at scale.** Relay works but the free TURN allowance is 500 MB a
   month, which suits demos rather than daily use. A paid tier or a self-hosted
