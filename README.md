@@ -30,6 +30,7 @@ Receiver scans it ────────────┘
 | [lib/peer.ts](lib/peer.ts) | The transfer engine — signalling, WebRTC, chunking, backpressure, resume |
 | [lib/protocol.ts](lib/protocol.ts) | Shared message shapes and tuning constants for both sides |
 | [lib/sink.ts](lib/sink.ts) | Where received bytes go: memory, one file on disk, or a whole folder |
+| [lib/text.ts](lib/text.ts) | Sending text or a link as a file, and the allow-list deciding what may be clicked |
 | [lib/pin.ts](lib/pin.ts) | PIN generation and salted digests, and why the attempt limit is the real control |
 | [lib/keepAwake.ts](lib/keepAwake.ts) | Screen wake lock held for the duration of a transfer |
 | [lib/device.ts](lib/device.ts) | Coarse device labelling, so each end can name the other |
@@ -88,6 +89,37 @@ paths ([`safeName`](lib/sink.ts)) — a sender could otherwise offer
 Browsers may block the second and later automatic downloads in a batch, so the
 file list always keeps an explicit Save link per file for anything the browser
 skipped.
+
+## Text and links
+
+Sometimes the thing you want on the other device is not a file — it is a URL, a
+Wi-Fi password, a shell command, a paragraph you would otherwise have emailed to
+yourself. The picker has a switch for that: paste it, send it, and it appears on
+the other screen with a Copy button.
+
+It rides the existing engine rather than adding a second path. The text is
+wrapped in a small text file, so it gets the same chunking, the same
+backpressure, the same resume and the same encryption as a 2 GB video, and
+there is nothing extra to keep working. `FileMeta` already carried the MIME
+type, so there is no protocol change either.
+
+What the receiver does differently is *not save it*. Every other payload is
+handed to the browser to download the moment it arrives; a snippet would leave a
+stray `note.txt` in Downloads and bury the one thing you wanted. Text is shown
+instead, with the file still one button away.
+
+**Received text is content from another device, so what it is allowed to become
+is deliberately narrow.** It renders as text, never as markup. An Open button
+appears only when the text is an `http` or `https` URL — an allow-list, not a
+blocklist — and opens with `noopener`, `noreferrer` and `nofollow`. A
+`javascript:` URL clicked on that page would run in the page's own origin, and
+`file:` would point at the receiver's own disk; both simply get no button, and so
+does scheme-less text like `example.com`, because deciding a dotted word is a
+hostname means being wrong sometimes and the wrong guess is an inviting button
+going somewhere nobody chose.
+
+The cap is 64 KB of encoded bytes — a snippet, not a document — and the counter
+shows bytes rather than characters, since one emoji is four of them.
 
 ## Optional PIN
 
@@ -449,7 +481,6 @@ back they go; an uptime pinger makes them meaningful.
 
 Optional, and none of it changes what the tool does:
 
-- **Text and link sharing** — paste a URL or a snippet instead of picking a file.
 - **Cross-network at scale.** Relay works but the free TURN allowance is 500 MB a
   month, which suits demos rather than daily use. A paid tier or a self-hosted
   `coturn` would lift it.
