@@ -177,18 +177,20 @@ the seam would fail the test.
 
 ```bash
 npm run signal           # in one terminal
-npm run test:signal      # 34 protocol checks: session lifecycle, resume tokens,
+npm run test:signal      # 56 protocol checks: session lifecycle, resume tokens,
                          # single-use lock, manifest validation, rate limit,
                          # peer-drop notification
 
 npm run dev:all          # in one terminal
-npm run test:e2e         # drives two real Chrome tabs through five scenarios:
+npm run test:e2e         # drives two real Chrome tabs through seven scenarios:
                          # a 3 MB transfer verified byte-for-byte; a 64 MB one
                          # whose link is cut mid-flight; four files in one
-                         # session each checked by sha256; and a batch cut after
-                         # the first file is banked, which must resume across the
+                         # session each checked by sha256; a batch cut after the
+                         # first file is banked, which must resume across the
                          # file boundary without duplicating or losing a chunk;
-                         # and a PIN-gated transfer through the real UI
+                         # a PIN-gated transfer through the real UI; a cancel,
+                         # which must tell the other end rather than look like a
+                         # drop; and a completion recorded in local history
 RESUME_RUNS=5 npm run test:e2e   # repeat the resume scenario to shake out races
 
 npm run build && npm run start   # production, in one terminal
@@ -207,24 +209,49 @@ npm run test:pin         # the PIN gate: a locked join leaking nothing, attempts
 
 npm run test:origins     # ALLOWED_ORIGINS: exact match, refusal, and the
                          # trailing-slash case that broke the first deployment
+npm run test:lifetime    # boots servers with the ceilings shortened, so an hour
+                         # of sweep behaviour runs in seconds: an idle session
+                         # expires, a live transfer is spared, and the six-hour
+                         # backstop still collects it
+npm run test:ratelimit   # the per-IP limit, and the client-IP derivation behind
+                         # it — one server per scenario, since sharing one lets
+                         # the first fill the bucket and make the rest look
+                         # refused for the wrong reason
+npm run test:history     # seeds storage directly, so it can test values a real
+                         # transfer could never produce: junk under the key, a
+                         # single corrupt record among good ones, the cap, and a
+                         # storage accessor that throws on access
+npm run test:merge       # no server, no browser: imports the history module
+                         # with a fake store and fake timers and reproduces the
+                         # cross-tab lost update on demand
+
 npm run build            # needed by the leak check below
 npm run test:turn        # TURN wiring against a stub provider: credentials
                          # delivered over the socket, minted once not per
                          # session, absent from the web bundle, and a provider
                          # outage degrading to STUN instead of breaking
 
-E2E_URL=https://qrdrop-seven.vercel.app npm run test:relay
-                         # forces iceTransportPolicy:"relay" via ?relay=1 and
+E2E_URL=https://qrdrop-seven.vercel.app SIGNAL_URL=https://qrdrop-u0kg.onrender.com \
+  npm run test:relay     # forces iceTransportPolicy:"relay" via ?relay=1 and
                          # sha256-checks the result — the only way to prove the
                          # relay carries a file, since on one network the direct
                          # path always wins. Needs real TURN credentials and
-                         # spends relay quota, so it is opt-in.
+                         # spends relay quota, so it is opt-in; with none
+                         # configured it reports SKIPPED rather than failing.
 ```
 
-All eight suites pass on the current tree — **152 checks** (34 signalling, 22 PIN, 14 origins, 16 TURN, 17 PWA, 35 browser transfers, 4 cold start, 6 live relay). The first six run in CI on every push. Leave a minute between
-them — the signal suite deliberately trips the 10-sessions-per-IP-per-minute
-limit, which would otherwise refuse the e2e run's own session. And don't run
-`next build` while `next dev` is live; they share `.next`.
+**231 checks across 12 suites**, counted on this tree: 56 signalling, 45 browser
+transfers, 23 PWA, 22 PIN, 17 history, 17 cross-tab merge, 16 TURN, 14 origins,
+6 rate limiting, 6 live relay, 5 session lifetimes, 4 cold start. All of them
+passed in one pass except two that cannot run against a development server: the
+service-worker check needs a production build, and the relay suite needs TURN
+credentials — that one was run separately against the live deployment, where it
+passes. Everything but the relay suite runs in CI on every push.
+
+Leave a minute between runs — the signal suite deliberately trips the
+10-sessions-per-IP-per-minute limit, which would otherwise refuse the e2e run's
+own session. And don't run `next build` while `next dev` is live; they share
+`.next`.
 
 ## CI
 
