@@ -33,11 +33,13 @@ Receiver scans it ────────────┘
 | [lib/pin.ts](lib/pin.ts) | PIN generation and salted digests, and why the attempt limit is the real control |
 | [lib/keepAwake.ts](lib/keepAwake.ts) | Screen wake lock held for the duration of a transfer |
 | [lib/device.ts](lib/device.ts) | Coarse device labelling, so each end can name the other |
+| [lib/history.ts](lib/history.ts) | The local record of recent transfers — validated on read, never a session id |
 | [components/Receiver.tsx](components/Receiver.tsx) | The whole receive flow: PIN gate, file list, progress, saving |
 | [components/DeviceLink.tsx](components/DeviceLink.tsx) | The two-device visual — the live state of the link |
+| [components/RecentTransfers.tsx](components/RecentTransfers.tsx) | The recent-transfers list on the home page |
 | [public/sw.js](public/sw.js) | Service worker, deliberately narrow so it cannot serve a stale build |
 | [server/](server/) | Socket.io signalling — relays SDP/ICE, mints TURN credentials, holds no files |
-| [test/](test/) | 10 suites, 197 checks: protocol, PIN, origins, TURN, PWA, cold start, real-Chrome transfers, live relay |
+| [test/](test/) | 12 suites, 231 checks: protocol, PIN, origins, TURN, session lifetimes, rate limiting, PWA, cold start, history, cross-tab merge, real-Chrome transfers, live relay |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: build plus every suite that needs no credentials |
 
 
@@ -113,6 +115,34 @@ in a server log. That is hygiene rather than protection *from* the server, which
 could brute-force a six-digit digest instantly and already sees every SDP it
 relays. A PAKE would fix that and is deliberately out of scope — the signaling
 server is trusted for routing either way.
+
+## Recent transfers
+
+The home page keeps a short list of the last ten transfers this browser has been
+part of — which way it went, how many files, how big, and how long ago. Enough to
+answer "did that actually go through?" without opening anything.
+
+It is a local convenience and nothing more:
+
+- **Names, counts, sizes and timestamps only.** Never file contents — the file was
+  never on this device's disk to begin with unless it was saved there.
+- **Never the session id.** That is a bearer token: anyone holding it can join the
+  transfer, so storing it would trade a real leak for a cosmetic feature.
+- **Nothing leaves the browser.** No server involved, which is what lets the app
+  keep claiming it collects nothing about anyone. Clearing it is one button, and
+  private windows keep no record at all.
+- **A corrupt record cannot take the page down.** The stored value is editable by
+  anyone, so every entry is validated on read and anything malformed is dropped.
+  Reading the storage accessor can itself throw — blocked site data, thumbnail
+  capture — so a failure degrades to "no history" rather than a blank page.
+
+One thing that only showed up under test: `localStorage` looks synchronous, and
+within a tab it is, but two tabs in separate renderer processes each hold a cache
+that syncs a few milliseconds later. Measured in a real Chrome, the sending tab
+wrote its record and the receiving tab read the key as empty 3ms afterwards, then
+wrote over it — one transfer, one record silently lost. Only reachable when both
+ends are tabs on one device. A write now re-checks itself at 120ms and 600ms and
+merges its entry back in if a stale snapshot buried it.
 
 ## Surviving interruptions
 
