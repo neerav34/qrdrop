@@ -147,6 +147,11 @@ jobs:
       # the hook that severs a live link. Killing the production server first is
       # not optional: both write to .next, and a build under a running server
       # leaves it serving chunks that no longer exist.
+      # Seeds storage directly rather than running dozens of transfers, so it
+      # can test values a real transfer could never produce.
+      - name: Local transfer history
+        run: npm run test:history
+
       - name: Transfers and resume (dev server)
         run: |
           pkill -f "next start" || true
