@@ -23,6 +23,19 @@ export function clock(ms: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+/** "just now", "6 min ago", "yesterday" — short enough for a dense list. */
+export function ago(at: number, now = Date.now()): string {
+  const secs = Math.max(0, Math.round((now - at) / 1000));
+  if (secs < 45) return "just now";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days === 1) return "yesterday";
+  return `${days}d ago`;
+}
+
 /** Plain-language summary of the route the file is taking. */
 export function pathLabel(p: {
   localType: string;

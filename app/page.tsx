@@ -1,6 +1,7 @@
 import Link from "next/link";
 import DeviceLink from "@/components/DeviceLink";
 import InstallButton from "@/components/InstallButton";
+import RecentTransfers from "@/components/RecentTransfers";
 
 export default function Home() {
   return (
@@ -40,6 +41,8 @@ export default function Home() {
           <small>scan a code</small>
         </Link>
       </div>
+
+      <RecentTransfers />
 
       <InstallButton />
 
