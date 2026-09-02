@@ -259,13 +259,14 @@ own session. And don't run `next build` while `next dev` is live; they share
 split by what they need:
 
 - **Build + protocol suites** — `next build` (which is also the typecheck), then
-  the four suites that need neither a browser nor credentials. Fast, and the one
+  the seven suites that need neither a browser nor credentials. Fast, and the one
   that should gate a merge. It boots the signaling server twice on separate ports
   because the signal suite deliberately trips the per-IP rate limit, which would
-  otherwise leave the PIN suite refused for the following minute.
-- **Browser transfers + PWA** — real Chrome, real WebRTC. The PWA suite needs a
-  production server (the worker is not registered in dev) and the resume scenarios
-  need a dev one (only that build carries the hook that severs a live link), so
+  otherwise leave the PIN suite refused for the following minute; the lifetime and
+  rate-limit suites boot their own on top of that.
+- **Browser transfers + PWA** — real Chrome, real WebRTC, plus the history suite.
+  The PWA suite needs a production server (the worker is not registered in dev)
+  and the resume scenarios need a dev one (only that build carries the hook that severs a live link), so
   the job runs one then the other, killing the first and clearing `.next` in
   between.
 
