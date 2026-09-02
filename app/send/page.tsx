@@ -9,6 +9,7 @@ import { bytes, clock, eta, pathLabel, rate } from "@/lib/format";
 import { useExitGuard } from "@/lib/hooks";
 import { relayForced } from "@/lib/relayFlag";
 import { formatPin, generatePin } from "@/lib/pin";
+import { addHistory } from "@/lib/history";
 import {
   startSender,
   type Progress,
@@ -63,6 +64,8 @@ export default function SendPage() {
 
   const handle = useRef<SenderHandle | null>(null);
   const startedAt = useRef(0);
+  /** The done screen re-renders; the record must be written exactly once. */
+  const recorded = useRef(false);
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -92,6 +95,18 @@ export default function SendPage() {
       setElapsed((performance.now() - startedAt.current) / 1000);
     }
   }, [status, elapsed]);
+
+  useEffect(() => {
+    if (status !== "done" || recorded.current || !files) return;
+    recorded.current = true;
+    addHistory({
+      direction: "sent",
+      fileCount: files.length,
+      totalSize: files.reduce((n, f) => n + f.size, 0),
+      firstName: files[0]?.name ?? "",
+      peer: peer?.label ?? null,
+    });
+  }, [status, files, peer]);
 
   const begin = useCallback((picked: File[]) => {
     if (!picked.length) return;
@@ -133,6 +148,7 @@ export default function SendPage() {
     else handle.current?.close();
     handle.current = null;
     startedAt.current = 0;
+    recorded.current = false;
     setFiles(null);
     setSessionId(null);
     setExpiresAt(0);
