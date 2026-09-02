@@ -15,6 +15,12 @@
  *    and thumbnail capture can make even *reading* the accessor throw, so every
  *    access is wrapped and every failure degrades to "no history" rather than a
  *    broken page.
+ *  - Two tabs can lose each other's records. `localStorage` looks synchronous
+ *    but is not shared synchronously across tabs in separate renderer
+ *    processes: each has a cache that syncs a few milliseconds later. Measured
+ *    here — one tab wrote the key and the other read it as empty 3ms after,
+ *    then wrote over it. So a write re-checks itself shortly afterwards and
+ *    merges its entry back in if a stale snapshot buried it.
  *  - The stored value is user-editable. Anyone can put junk under this key, so
  *    it is validated entry by entry on read and anything malformed is dropped —
  *    a corrupt record must never take the home page down with it.
@@ -37,6 +43,19 @@ export type HistoryEntry = {
   firstName: string;
   /** The other device's label, when it was known. */
   peer: string | null;
+};
+
+/**
+ * When a write re-checks that its entry survived. Two passes: the first covers
+ * the ordinary cross-tab lag, the second a slow one.
+ */
+const HEAL_DELAYS = [120, 600];
+
+/** Injectable so tests need no real timers. */
+export type Schedule = (fn: () => void, ms: number) => void;
+
+const defaultSchedule: Schedule = (fn, ms) => {
+  if (typeof setTimeout === "function") setTimeout(fn, ms);
 };
 
 /** Just the parts of Storage used here, so tests can supply a fake. */
@@ -97,27 +116,47 @@ export function readHistory(store: StorageLike | null = defaultStore()): History
   }
 }
 
-export function addHistory(
-  entry: Omit<HistoryEntry, "id" | "at">,
-  store: StorageLike | null = defaultStore(),
-): HistoryEntry[] {
-  const next: HistoryEntry[] = [
-    {
-      ...entry,
-      id:
-        typeof crypto !== "undefined" && crypto.randomUUID
-          ? crypto.randomUUID()
-          : String(Math.random()),
-      at: Date.now(),
-    },
-    ...readHistory(store),
-  ].slice(0, HISTORY_LIMIT);
-
+/**
+ * Folds one entry into whatever the store currently holds, newest first. Reading
+ * at write time is what makes a concurrent writer's snapshot survivable.
+ */
+function mergeEntry(entry: HistoryEntry, store: StorageLike | null): HistoryEntry[] {
+  const next = [entry, ...readHistory(store).filter((e) => e.id !== entry.id)]
+    .sort((a, b) => b.at - a.at)
+    .slice(0, HISTORY_LIMIT);
   if (store) {
     try {
       store.setItem(KEY, JSON.stringify(next));
     } catch {
       // A full or read-only store costs us the record, nothing more.
+    }
+  }
+  return next;
+}
+
+export function addHistory(
+  entry: Omit<HistoryEntry, "id" | "at">,
+  store: StorageLike | null = defaultStore(),
+  schedule: Schedule = defaultSchedule,
+): HistoryEntry[] {
+  const full: HistoryEntry = {
+    ...entry,
+    id:
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : String(Math.random()),
+    at: Date.now(),
+  };
+  const next = mergeEntry(full, store);
+
+  // Another tab may since have written a snapshot taken before ours landed.
+  if (store) {
+    for (const ms of HEAL_DELAYS) {
+      schedule(() => {
+        if (!readHistory(store).some((e) => e.id === full.id)) {
+          mergeEntry(full, store);
+        }
+      }, ms);
     }
   }
   return next;
