@@ -28,7 +28,7 @@ export default function Home() {
             <path d="m5 12 7-7 7 7" />
           </svg>
           Send
-          <small>a file</small>
+          <small>files or text</small>
         </Link>
         <Link className="card-btn" href="/receive">
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
