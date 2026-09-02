@@ -7,6 +7,7 @@ import { describeDevice } from "@/lib/device";
 import { bytes, eta, rate } from "@/lib/format";
 import { useExitGuard } from "@/lib/hooks";
 import { relayForced } from "@/lib/relayFlag";
+import { addHistory } from "@/lib/history";
 import { PIN_LENGTH } from "@/lib/protocol";
 import {
   startReceiver,
@@ -56,8 +57,22 @@ export default function Receiver({ sessionId }: { sessionId: string }) {
 
   const handle = useRef<ReceiverHandle | null>(null);
   const urls = useRef<string[]>([]);
+  /** The completion screen re-renders; the record must be written once. */
+  const recorded = useRef(false);
 
   useEffect(() => setMe(describeDevice()), []);
+
+  useEffect(() => {
+    if (!complete || recorded.current || !manifest) return;
+    recorded.current = true;
+    addHistory({
+      direction: "received",
+      fileCount: manifest.length,
+      totalSize: manifest.reduce((n, f) => n + f.size, 0),
+      firstName: manifest[0]?.name ?? "",
+      peer: peer?.label ?? null,
+    });
+  }, [complete, manifest, peer]);
 
   useExitGuard(status === "receiving" || status === "paused" || status === "linking");
 
