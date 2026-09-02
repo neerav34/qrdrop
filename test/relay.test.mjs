@@ -12,6 +12,13 @@
  * transfer between two genuinely separated networks will too.
  *
  * It spends relay quota equal to the payload size — deliberately small.
+ *
+ * With no TURN provider configured there is nothing to prove, so it reports
+ * SKIPPED and exits 0 rather than failing. A suite that fails for want of a
+ * credential trains you to ignore it, and the interesting failure — credentials
+ * present but the relay not carrying bytes — then looks identical to the boring
+ * one. Forcing `iceTransportPolicy: "relay"` with no relay to use detaches the
+ * frame on connect, which is how that used to be reported.
  */
 import puppeteer from "puppeteer-core";
 import fs from "node:fs";
@@ -42,7 +49,28 @@ const srcHash = sha(fs.readFileSync(src));
 const dl = path.join(WORK, "dl");
 fs.mkdirSync(dl);
 
-console.log(`\n▸ forcing the relay for a ${(SIZE / 1024).toFixed(0)} KB transfer`);
+// Ask the signaling server whether it has a relay at all before spending a
+// browser launch and a payload on finding out the hard way.
+const SIGNAL = process.env.SIGNAL_URL || "http://localhost:4000";
+let turnMode = "unreachable";
+try {
+  const res = await fetch(`${SIGNAL}/healthz`);
+  turnMode = (await res.json()).turn ?? "unknown";
+} catch {
+  /* leave it unreachable */
+}
+if (turnMode === "none" || turnMode === "unreachable") {
+  console.log(
+    `\n  ~ forced-relay transfer — SKIPPED: ${SIGNAL} reports turn="${turnMode}".` +
+      "\n    Set TURN credentials on the signaling server to run this suite" +
+      " (or point SIGNAL_URL at a deployment that has them).",
+  );
+  process.exit(0);
+}
+
+console.log(
+  `\n▸ forcing the relay for a ${(SIZE / 1024).toFixed(0)} KB transfer (turn: ${turnMode})`,
+);
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
