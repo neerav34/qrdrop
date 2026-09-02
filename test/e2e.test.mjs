@@ -552,6 +552,80 @@ try {
     check("the sender is told the receiver cancelled", senderTold);
     await Promise.all([send.close(), recv.close()]);
   }
+  // ===================== 7. a completed transfer reaches local history
+  // The seeded history suite covers the storage; this covers the wiring — that a
+  // real completion on each side actually writes a record, with the right
+  // direction and size.
+  //
+  // Note both peers are pages in ONE browser, so they share a single origin's
+  // storage: a completed transfer therefore leaves *two* records here, one from
+  // each side. On real devices they would be separate stores. The earlier
+  // scenarios have also been filling that store, so it is cleared first.
+  log("\n▸ scenario 7 — a completed transfer appears in history");
+  {
+    const payload = makePayload("history-check.bin", 900 * 1024 + 7);
+    const dl = path.join(WORK, "dl7");
+    const { page: send, url } = await openSender(payload.file, "s7");
+    await send.evaluate(() => localStorage.removeItem("qrdrop.history.v1"));
+    const recv = await openReceiver(url, dl, "s7");
+    await (await recv.waitForSelector(".btn.primary", { timeout: 20000 })).click();
+    await recv.waitForFunction(
+      () => document.querySelector("a.btn.primary")?.textContent?.includes("Save file"),
+      { timeout: 90000 },
+    );
+    await send.waitForFunction(() => document.body.innerText.includes("delivered"), {
+      timeout: 30000,
+    });
+    await sleep(600);
+
+    const readStored = (page) =>
+      page.evaluate(() => {
+        try {
+          return JSON.parse(localStorage.getItem("qrdrop.history.v1") || "[]");
+        } catch {
+          return "unparseable";
+        }
+      });
+
+    const sent = await readStored(send);
+    const received = await readStored(recv);
+
+    check(
+      "both sides recorded the transfer",
+      Array.isArray(sent) && sent.length === 2,
+      Array.isArray(sent) ? `${sent.length} entries (shared store)` : String(sent),
+    );
+    const asSent = sent.find((e) => e.direction === "sent");
+    const asReceived = received.find((e) => e.direction === "received");
+    check(
+      "the sending side recorded it as sent, with the right name and size",
+      asSent?.firstName === "history-check.bin" && asSent?.totalSize === payload.size,
+      JSON.stringify(asSent ?? null),
+    );
+    check(
+      "the receiving side recorded it as received",
+      asReceived?.totalSize === payload.size && asReceived?.fileCount === 1,
+      JSON.stringify(asReceived ?? null),
+    );
+    check(
+      "no session id was stored — it is a bearer token",
+      !JSON.stringify(sent).includes(url.split("/r/")[1].split("?")[0]),
+      "storing it would leak a live transfer link",
+    );
+
+    // And it shows up on the home page, which is the point of recording it.
+    await send.goto(`${BASE}/`, { waitUntil: "networkidle2" });
+    const shown = await send.evaluate(() => ({
+      rows: document.querySelectorAll(".recent-list li").length,
+      name: document.querySelector(".recent-name")?.textContent?.trim() ?? "",
+    }));
+    check(
+      "and is listed on the home page",
+      shown.rows === 2 && shown.name.includes("history-check.bin"),
+      `${shown.rows} rows, ${JSON.stringify(shown.name)}`,
+    );
+    await Promise.all([send.close(), recv.close()]);
+  }
 } catch (e) {
   failed = true;
   log("  ✗ threw:", e.message);
