@@ -43,6 +43,11 @@ jobs:
       - name: History merge
         run: npm run test:merge
 
+      # Also serverless. Most of it guards safeExternalUrl, which decides whether
+      # text that arrived from another device may become something clickable.
+      - name: Text and link sharing
+        run: npm run test:text
+
       # Two servers on separate ports, because the signal suite deliberately
       # trips the per-IP rate limit — sharing one process would leave the PIN
       # suite refused for the following minute.
