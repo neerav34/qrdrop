@@ -10,6 +10,7 @@ import { useExitGuard } from "@/lib/hooks";
 import { relayForced } from "@/lib/relayFlag";
 import { formatPin, generatePin } from "@/lib/pin";
 import { TEXT_MAX_BYTES, safeExternalUrl, textBytes, textToFile } from "@/lib/text";
+import { sharedFromLocation } from "@/lib/shared";
 import { addHistory } from "@/lib/history";
 import {
   startSender,
@@ -75,6 +76,14 @@ export default function SendPage() {
     setOrigin(window.location.origin);
     setMe(describeDevice());
     setForceRelay(relayForced());
+
+    // Arrived through another app's share sheet. Prefilled rather than sent, so
+    // what leaves this device is something they saw first.
+    const shared = sharedFromLocation();
+    if (shared) {
+      setTextMode(true);
+      setText(shared);
+    }
   }, []);
 
   useEffect(() => () => handle.current?.close(), []);

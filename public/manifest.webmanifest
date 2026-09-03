@@ -30,6 +30,15 @@
       "purpose": "maskable"
     }
   ],
+  "share_target": {
+    "action": "/send",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
   "shortcuts": [
     { "name": "Send a file", "url": "/send" },
     { "name": "Receive a file", "url": "/receive" }
