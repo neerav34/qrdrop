@@ -482,7 +482,8 @@ back they go; an uptime pinger makes them meaningful.
 - **Resume needs the page alive.** Backgrounding is survivable; a full reload
   loses the partial data, because it lives in the tab. Persisting progress to
   IndexedDB or a disk file handle would fix that.
-- One file per session; zip client-side for multiple.
+- **Text is capped at 64 KB.** Longer than that is better sent as a file, and is
+  what the box tells you to do.
 
 ## Next up
 
