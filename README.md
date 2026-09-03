@@ -30,6 +30,7 @@ Receiver scans it ────────────┘
 | [lib/peer.ts](lib/peer.ts) | The transfer engine — signalling, WebRTC, chunking, backpressure, resume |
 | [lib/protocol.ts](lib/protocol.ts) | Shared message shapes and tuning constants for both sides |
 | [lib/sink.ts](lib/sink.ts) | Where received bytes go: memory, one file on disk, or a whole folder |
+| [lib/shared.ts](lib/shared.ts) | Folding another app's share into one snippet |
 | [lib/text.ts](lib/text.ts) | Sending text or a link as a file, and the allow-list deciding what may be clicked |
 | [lib/pin.ts](lib/pin.ts) | PIN generation and salted digests, and why the attempt limit is the real control |
 | [lib/keepAwake.ts](lib/keepAwake.ts) | Screen wake lock held for the duration of a transfer |
@@ -120,6 +121,27 @@ going somewhere nobody chose.
 
 The cap is 64 KB of encoded bytes — a snippet, not a document — and the counter
 shows bytes rather than characters, since one emoji is four of them.
+
+### Sharing into it from another app
+
+Once installed, QRDrop appears in the system share sheet. Share a page from
+Chrome on Android, or a snippet from a notes app, and it opens with the text
+already in the box — one tap from a link on your phone to a QR code your laptop
+can scan.
+
+It arrives **prefilled, not sent**. A share sheet gives you no chance to look at
+what you picked, and what leaves the device should be something you saw first.
+
+It is a `GET` share target, so it needs no service worker to read a POST body:
+text and links only. Sharing a *file* into the app is a separate piece of work.
+
+One deliberate detail: sharing a page sends both its title and its URL, and the
+title is dropped. Joining them would make two lines, which is no longer a bare
+URL, so the receiving device would show prose with no button to open the link
+that was the point of the share.
+
+Only the installed app appears in a share sheet, and iOS does not support share
+targets at all — on iPhone, paste into the box instead.
 
 ## Optional PIN
 
