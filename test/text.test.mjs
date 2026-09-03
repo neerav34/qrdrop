@@ -16,6 +16,7 @@
  * one case that passes every other check, so it is the assertion that actually
  * holds the allow-list in place. It is not filler.
  */
+import { composeShared } from "../lib/shared.ts";
 import {
   TEXT_MAX_BYTES,
   TEXT_TYPE,
@@ -83,6 +84,34 @@ console.log("\n▸ what may become a clickable link");
   ]) {
     check(`refuses ${label}`, safeExternalUrl(value) === null, JSON.stringify(value.slice(0, 40)));
   }
+}
+
+// Share sheets disagree about which field holds what, so these are the shapes
+// real ones send rather than the shapes the spec permits.
+console.log("\n▸ folding another app's share into one snippet");
+{
+  const c = (o) => composeShared(o);
+  check(
+    "a page shared from a browser stays a bare link",
+    c({ title: "Example Domain", url: "https://example.com/" }) === "https://example.com/",
+    JSON.stringify(c({ title: "Example Domain", url: "https://example.com/" })),
+  );
+  check(
+    "text that already contains the link is not doubled",
+    c({ text: "look at this https://example.com/x", url: "https://example.com/x" }) ===
+      "look at this https://example.com/x",
+  );
+  check(
+    "a comment plus a link keeps both",
+    c({ text: "read later", url: "https://example.com/x" }) === "read later\nhttps://example.com/x",
+  );
+  check("plain text alone", c({ text: "the kettle is broken" }) === "the kettle is broken");
+  check("a title is used only when it is all there is", c({ title: "Just a title" }) === "Just a title");
+  check("an empty share composes to nothing", c({}) === "" && c({ text: "  ", url: null }) === "");
+  check(
+    "whitespace around the fields is trimmed",
+    c({ text: "  note  ", url: "  https://example.com  " }) === "note\nhttps://example.com",
+  );
 }
 
 console.log(failed ? "\nTEXT FAILED" : "\nTEXT PASSED");
