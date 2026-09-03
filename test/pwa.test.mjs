@@ -46,6 +46,22 @@ try {
   check("start_url is set", manifest.start_url === "/", manifest.start_url);
   check("display is standalone", manifest.display === "standalone", manifest.display);
 
+  // Share target: the declaration is the whole feature on the manifest side, and
+  // a system share sheet cannot be driven from here — see the note at the end.
+  const st = manifest.share_target || {};
+  check("declares a share target", !!manifest.share_target);
+  check("shares land on the send page", st.action === "/send", String(st.action));
+  check(
+    "by GET, which needs no service worker to read a body",
+    (st.method || "GET").toUpperCase() === "GET",
+    String(st.method),
+  );
+  check(
+    "and it accepts all three fields a share sheet may send",
+    st.params?.title === "title" && st.params?.text === "text" && st.params?.url === "url",
+    JSON.stringify(st.params),
+  );
+
   const sizes = (manifest.icons || []).map((i) => i.sizes);
   // Chrome will not offer to install without both of these.
   check("declares a 192x192 icon", sizes.includes("192x192"), sizes.join(" "));
@@ -95,6 +111,32 @@ try {
     swState === "none"
       ? "none registered — is this a production build? (npm run build && npm run start)"
       : swState,
+  );
+
+  // A share arriving is just a navigation with query parameters, so the half
+  // that matters can be tested even though the share sheet cannot.
+  await page.goto(
+    `${BASE}/send?title=Example%20Domain&url=https%3A%2F%2Fexample.com%2F`,
+    { waitUntil: "networkidle2" },
+  );
+  const shared = await page.evaluate(() => ({
+    box: document.querySelector(".text-input")?.value ?? null,
+    button: document.querySelector(".text-foot .btn")?.textContent?.trim() ?? null,
+  }));
+  check(
+    "a shared page prefills the send box",
+    shared.box === "https://example.com/",
+    JSON.stringify(shared.box),
+  );
+  check(
+    "as a link, so the receiver gets a working Open button",
+    shared.button === "Send link",
+    String(shared.button),
+  );
+  await page.goto(`${BASE}/send`, { waitUntil: "networkidle2" });
+  check(
+    "an ordinary visit still shows the file picker",
+    !!(await page.$(".drop")) && !(await page.$(".text-input")),
   );
 
   // The manifest link has to be in the document, not just the file on disk.
