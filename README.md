@@ -41,7 +41,7 @@ Receiver scans it ────────────┘
 | [components/RecentTransfers.tsx](components/RecentTransfers.tsx) | The recent-transfers list on the home page |
 | [public/sw.js](public/sw.js) | Service worker, deliberately narrow so it cannot serve a stale build |
 | [server/](server/) | Socket.io signalling — relays SDP/ICE, mints TURN credentials, holds no files |
-| [test/](test/) | 13 suites, 285 checks: protocol, PIN, origins, TURN, session lifetimes, rate limiting, PWA, cold start, history, cross-tab merge, text sharing, real-Chrome transfers, live relay |
+| [test/](test/) | 13 suites, 286 checks: protocol, PIN, origins, TURN, session lifetimes, rate limiting, PWA, cold start, history, cross-tab merge, text sharing, real-Chrome transfers, live relay |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: build plus every suite that needs no credentials |
 
 
@@ -301,10 +301,12 @@ E2E_URL=https://qrdrop-seven.vercel.app SIGNAL_URL=https://qrdrop-u0kg.onrender.
                          # configured it reports SKIPPED rather than failing.
 ```
 
-**285 checks across 13 suites**, counted on this tree: 59 browser transfers, 56
-signalling, 33 text and share, 30 PWA, 22 PIN, 17 history, 17 cross-tab merge,
+**286 checks across 13 suites**, counted on this tree: 59 browser transfers, 56
+signalling, 33 text and share, 31 PWA, 22 PIN, 17 history, 17 cross-tab merge,
 16 TURN, 14 origins, 6 rate limiting, 6 live relay, 5 session lifetimes, 4 cold
-start. All of them
+start. Counted against a production build, which is what CI runs: in `next dev`
+the PWA suite is one check shorter, because there is no service worker to cut
+the network on. All of them
 passed in one pass except two that cannot run against a development server: the
 service-worker check needs a production build, and the relay suite needs TURN
 credentials — that one was run separately against the live deployment, where it
