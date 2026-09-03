@@ -115,29 +115,38 @@ try {
 
   // A share arriving is just a navigation with query parameters, so the half
   // that matters can be tested even though the share sheet cannot.
-  await page.goto(
-    `${BASE}/send?title=Example%20Domain&url=https%3A%2F%2Fexample.com%2F`,
-    { waitUntil: "networkidle2" },
-  );
-  const shared = await page.evaluate(() => ({
-    box: document.querySelector(".text-input")?.value ?? null,
-    button: document.querySelector(".text-foot .btn")?.textContent?.trim() ?? null,
-  }));
-  check(
-    "a shared page prefills the send box",
-    shared.box === "https://example.com/",
-    JSON.stringify(shared.box),
-  );
-  check(
-    "as a link, so the receiver gets a working Open button",
-    shared.button === "Send link",
-    String(shared.button),
-  );
-  await page.goto(`${BASE}/send`, { waitUntil: "networkidle2" });
-  check(
-    "an ordinary visit still shows the file picker",
-    !!(await page.$(".drop")) && !(await page.$(".text-input")),
-  );
+  //
+  // In its own tab, deliberately. The offline check further down reloads
+  // whatever `page` is showing, and it has to be the cached shell — navigating
+  // this one to /send left it reloading an uncached route with the network cut,
+  // which failed CI and looked like the worker's fault.
+  {
+    const tab = await browser.newPage();
+    await tab.goto(
+      `${BASE}/send?title=Example%20Domain&url=https%3A%2F%2Fexample.com%2F`,
+      { waitUntil: "networkidle2" },
+    );
+    const shared = await tab.evaluate(() => ({
+      box: document.querySelector(".text-input")?.value ?? null,
+      button: document.querySelector(".text-foot .btn")?.textContent?.trim() ?? null,
+    }));
+    check(
+      "a shared page prefills the send box",
+      shared.box === "https://example.com/",
+      JSON.stringify(shared.box),
+    );
+    check(
+      "as a link, so the receiver gets a working Open button",
+      shared.button === "Send link",
+      String(shared.button),
+    );
+    await tab.goto(`${BASE}/send`, { waitUntil: "networkidle2" });
+    check(
+      "an ordinary visit still shows the file picker",
+      !!(await tab.$(".drop")) && !(await tab.$(".text-input")),
+    );
+    await tab.close();
+  }
 
   // The manifest link has to be in the document, not just the file on disk.
   const linked = await page.$eval('link[rel="manifest"]', (el) => el.getAttribute("href"))
