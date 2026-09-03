@@ -3,11 +3,18 @@
  * signaling server that isn't up yet. That must look like waiting, not failing.
  *
  * NOTE: this test owns the signaling server on port 4000 — it stops whatever is
- * listening there and starts its own. Run it with the web dev server up but
- * `npm run signal` NOT running:
+ * listening there and starts its own, so `npm run dev:all` loses its signaling
+ * half for the rest of that session.
  *
  *   npm run dev            # in one terminal
  *   npm run test:coldstart
+ *
+ * It clears the port by looking up what is bound to it, rather than by matching
+ * a command line. The previous version matched `node index.js`, which is not how
+ * this repo starts the server (`node server/index.js`), so with the dev servers
+ * up it quietly measured a *warm* server and failed the one assertion that
+ * matters — looking exactly like an app regression. If the port cannot be freed
+ * this now says so and stops, rather than testing the wrong thing.
  */
 import puppeteer from "puppeteer-core";
 import fs from "node:fs";
@@ -35,13 +42,36 @@ fs.mkdirSync(WORK, { recursive: true });
 const payload = path.join(WORK, "doc.pdf");
 fs.writeFileSync(payload, crypto.randomBytes(300_000));
 
-// Make sure nothing is serving signaling, so the page meets a cold server.
-try {
-  execSync("pkill -f 'node index.js'", { stdio: "ignore" });
-} catch {
-  /* nothing was running */
+/** Whatever is listening on a TCP port, by pid. Empty when the port is free. */
+function listeners(port) {
+  try {
+    return execSync(`lsof -ti tcp:${port}`, { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+  } catch {
+    return []; // lsof exits non-zero when nothing matches
+  }
 }
-await sleep(800);
+
+// Make sure nothing is serving signaling, so the page meets a cold server.
+for (const pid of listeners(4000)) {
+  try {
+    process.kill(Number(pid), "SIGTERM");
+  } catch {
+    /* already gone */
+  }
+}
+for (let i = 0; i < 25 && listeners(4000).length; i++) await sleep(200);
+if (listeners(4000).length) {
+  console.log(
+    `  ✗ port 4000 is still in use by pid ${listeners(4000).join(", ")} — stop it and rerun.`,
+  );
+  console.log("    A warm server here would test the opposite of what this suite is for.");
+  process.exit(1);
+}
+await sleep(400);
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
