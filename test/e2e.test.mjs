@@ -201,6 +201,10 @@ try {
     // — on localhost both ends offer host candidates ("same network"), while on a
     // real HTTPS origin Chrome hides local IPs behind mDNS and the pair resolves
     // reflexively ("peer-to-peer"). Neither puts a server in the data path.
+    // The route is read off the ICE stats, which can settle a moment after the
+    // last byte on a fast local transfer, so wait for the line rather than
+    // sampling once and throwing.
+    await send.waitForSelector(".pathline", { timeout: 15000 });
     const pathText = await send.$eval(".pathline", (el) => el.textContent);
     check(
       "connection was direct, with no relay in the data path",

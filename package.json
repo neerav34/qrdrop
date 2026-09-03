@@ -21,7 +21,8 @@
     "test:ratelimit": "node test/ratelimit.test.mjs",
     "test:history": "node test/history.test.mjs",
     "test:merge": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types test/history-merge.test.mjs",
-    "test:text": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types test/text.test.mjs"
+    "test:text": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types test/text.test.mjs",
+    "test:linkpath": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning --experimental-strip-types test/linkpath.test.mjs"
   },
   "dependencies": {
     "html5-qrcode": "^2.3.8",

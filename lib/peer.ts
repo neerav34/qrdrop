@@ -2,6 +2,7 @@
 
 import { io, type Socket } from "socket.io-client";
 import { describeDevice } from "./device";
+import { reportPath } from "./linkpath";
 import { keepAwake, type KeepAwake } from "./keepAwake";
 import { pinDigest, randomSalt } from "./pin";
 import {
@@ -89,48 +90,6 @@ function makeRateMeter() {
   };
 }
 
-/**
- * Read the negotiated ICE candidate pair back off the connection, so we can tell
- * the user (truthfully) whether the bytes are going straight across the local
- * network or out through a relay.
- */
-async function readPath(p: RTCPeerConnection): Promise<LinkPath | null> {
-  let stats: RTCStatsReport;
-  try {
-    stats = await p.getStats();
-  } catch {
-    return null;
-  }
-  type Pair = {
-    type: string;
-    state?: string;
-    nominated?: boolean;
-    selected?: boolean;
-    localCandidateId?: string;
-    remoteCandidateId?: string;
-  };
-  let pair: Pair | null = null;
-  stats.forEach((raw) => {
-    const r = raw as Pair;
-    if (r.type !== "candidate-pair") return;
-    if (r.selected || (r.state === "succeeded" && r.nominated)) pair = r;
-  });
-  if (!pair) return null;
-  const chosen: Pair = pair;
-  const local = chosen.localCandidateId
-    ? (stats.get(chosen.localCandidateId) as { candidateType?: string } | undefined)
-    : undefined;
-  const remote = chosen.remoteCandidateId
-    ? (stats.get(chosen.remoteCandidateId) as { candidateType?: string } | undefined)
-    : undefined;
-  const localType = local?.candidateType ?? "unknown";
-  const remoteType = remote?.candidateType ?? "unknown";
-  return {
-    localType,
-    remoteType,
-    relayed: localType === "relay" || remoteType === "relay",
-  };
-}
 
 /**
  * A free-tier container that has idled out takes a while to boot. Say so instead
@@ -350,9 +309,11 @@ export function startSender(
           clearTimeout(watchdog);
           watchdog = null;
         }
-        void readPath(p).then((path) => {
-          if (path && gen === myGen) cb.onPath(path);
-        });
+        void reportPath(
+          p,
+          () => gen === myGen && !closed,
+          (path) => cb.onPath(path),
+        );
       }
       if (p.connectionState === "failed" || p.connectionState === "disconnected") {
         pause("Connection to the receiver dropped. Retrying…");

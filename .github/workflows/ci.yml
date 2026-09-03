@@ -48,6 +48,12 @@ jobs:
       - name: Text and link sharing
         run: npm run test:text
 
+      # The one piece of the transfer engine testable without a browser: reading
+      # the connection's route, and the retry that stops a late-settling ICE pair
+      # from leaving the route unreported.
+      - name: Connection route reporting
+        run: npm run test:linkpath
+
       # Two servers on separate ports, because the signal suite deliberately
       # trips the per-IP rate limit — sharing one process would leave the PIN
       # suite refused for the following minute.

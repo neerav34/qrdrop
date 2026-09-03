@@ -114,6 +114,7 @@ try {
   await send.waitForFunction(() => document.body.innerText.includes("delivered"), {
     timeout: 60000,
   });
+  await send.waitForSelector(".pathline", { timeout: 15000 });
   const pathText = (await send.$eval(".pathline", (el) => el.textContent)).trim();
   check(
     "the negotiated path really is the relay",
