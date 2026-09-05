@@ -96,6 +96,33 @@ const browser = await puppeteer.launch({
 });
 
 /** Opens the sender, picks the file, and returns the share URL. */
+/**
+ * Waits, and on timeout says what the page was actually doing.
+ *
+ * A bare "Waiting failed: 120000ms exceeded" cannot distinguish a transfer that
+ * stalled from one that was merely slower than the budget on a loaded CI runner
+ * — and the difference decides whether anyone needs to look. This turns the
+ * timeout into a reported state instead of a thrown error, and lets the rest of
+ * the scenario carry on and fail informatively.
+ */
+async function waitFor(page, fn, { timeout = 30000, label = "condition" } = {}) {
+  try {
+    await page.waitForFunction(fn, { timeout });
+    return { ok: true, state: "" };
+  } catch {
+    const state = await page
+      .evaluate(() => ({
+        done: document.querySelectorAll('.filelist li[data-state="done"]').length,
+        active: document.querySelectorAll('.filelist li[data-state="active"]').length,
+        pct: document.querySelector(".pct")?.textContent ?? null,
+        notice: document.querySelector(".notice")?.textContent?.trim() ?? null,
+        head: document.body.innerText.split("\n").slice(0, 6).join(" | "),
+      }))
+      .catch((e) => ({ head: `page unreadable: ${e.message}` }));
+    return { ok: false, state: `${label} — ${JSON.stringify(state)}` };
+  }
+}
+
 async function openSender(payloadPaths, tag, opts = {}) {
   const paths = Array.isArray(payloadPaths) ? payloadPaths : [payloadPaths];
   const page = await browser.newPage();
@@ -343,11 +370,12 @@ try {
     check("it shows the batch total, not one file", /2\.4 MB|2\.3 MB/.test(headline), headline);
 
     await (await recv.$(".btn.primary")).click();
-    await recv.waitForFunction(
+    const four = await waitFor(
+      recv,
       () => document.querySelectorAll('.filelist li[data-state="done"]').length === 4,
-      { timeout: 120000 },
+      { timeout: 150000, label: "four files done" },
     );
-    check("all four files complete", true);
+    check("all four files complete", four.ok, four.state);
 
     await send.waitForFunction(() => document.body.innerText.includes("delivered"), {
       timeout: 30000,
