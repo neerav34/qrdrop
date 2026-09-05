@@ -168,7 +168,10 @@ jobs:
       - name: Local transfer history
         run: npm run test:history
 
-      - name: Transfers and resume (dev server)
+      # Both of these need a development build: the transfer suite cuts a live
+      # link through a hook production strips, and the partials suite reaches
+      # the store through another one.
+      - name: Transfers, resume and partial storage (dev server)
         run: |
           pkill -f "next start" || true
           pkill -f next-server || true
@@ -179,6 +182,7 @@ jobs:
             curl -sf http://localhost:3000/send > /dev/null && break
             sleep 1
           done
+          npm run test:partials
           npm run test:e2e
 
       - name: Logs on failure
