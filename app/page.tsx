@@ -2,6 +2,7 @@ import Link from "next/link";
 import DeviceLink from "@/components/DeviceLink";
 import InstallButton from "@/components/InstallButton";
 import RecentTransfers from "@/components/RecentTransfers";
+import Housekeeping from "@/components/Housekeeping";
 
 export default function Home() {
   return (
@@ -45,6 +46,7 @@ export default function Home() {
       <RecentTransfers />
 
       <InstallButton />
+      <Housekeeping />
 
       <p className="footnote">
         Phone, laptop, iPhone, Android — anything with a browser, in any
