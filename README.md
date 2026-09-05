@@ -30,6 +30,8 @@ Receiver scans it ────────────┘
 | [lib/peer.ts](lib/peer.ts) | The transfer engine — signalling, WebRTC, chunking, backpressure, resume |
 | [lib/protocol.ts](lib/protocol.ts) | Shared message shapes and tuning constants for both sides |
 | [lib/sink.ts](lib/sink.ts) | Where received bytes go: memory, one file on disk, or a whole folder |
+| [lib/linkpath.ts](lib/linkpath.ts) | Reading which route the bytes are taking, and retrying until the answer exists |
+| [lib/partials.ts](lib/partials.ts) | Where a half-received transfer is kept so a reload can pick it up |
 | [lib/shared.ts](lib/shared.ts) | Folding another app's share into one snippet |
 | [lib/text.ts](lib/text.ts) | Sending text or a link as a file, and the allow-list deciding what may be clicked |
 | [lib/pin.ts](lib/pin.ts) | PIN generation and salted digests, and why the attempt limit is the real control |
@@ -38,10 +40,11 @@ Receiver scans it ────────────┘
 | [lib/history.ts](lib/history.ts) | The local record of recent transfers — validated on read, never a session id |
 | [components/Receiver.tsx](components/Receiver.tsx) | The whole receive flow: PIN gate, file list, progress, saving |
 | [components/DeviceLink.tsx](components/DeviceLink.tsx) | The two-device visual — the live state of the link |
+| [components/Housekeeping.tsx](components/Housekeeping.tsx) | Renders nothing; sweeps expired partial transfers when the app opens |
 | [components/RecentTransfers.tsx](components/RecentTransfers.tsx) | The recent-transfers list on the home page |
 | [public/sw.js](public/sw.js) | Service worker, deliberately narrow so it cannot serve a stale build |
 | [server/](server/) | Socket.io signalling — relays SDP/ICE, mints TURN credentials, holds no files |
-| [test/](test/) | 14 suites, 297 checks: protocol, PIN, origins, TURN, session lifetimes, rate limiting, PWA, cold start, history, cross-tab merge, text sharing, route reporting, real-Chrome transfers, live relay |
+| [test/](test/) | 15 suites, 318 checks: protocol, PIN, origins, TURN, session lifetimes, rate limiting, PWA, cold start, history, cross-tab merge, text sharing, route reporting, partial storage, real-Chrome transfers, live relay |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: build plus every suite that needs no credentials |
 
 
@@ -274,6 +277,9 @@ npm run test:ratelimit   # the per-IP limit, and the client-IP derivation behind
                          # it — one server per scenario, since sharing one lets
                          # the first fill the bucket and make the rest look
                          # refused for the wrong reason
+npm run test:partials    # the store a reload has to survive: 6 MB written, page
+                         # reloaded, read back byte-for-byte — plus the expiry
+                         # and sweeping that stop it hoarding file contents
 npm run test:history     # seeds storage directly, so it can test values a real
                          # transfer could never produce: junk under the key, a
                          # single corrupt record among good ones, the cap, and a
@@ -304,10 +310,10 @@ E2E_URL=https://qrdrop-seven.vercel.app SIGNAL_URL=https://qrdrop-u0kg.onrender.
                          # configured it reports SKIPPED rather than failing.
 ```
 
-**297 checks across 14 suites**, counted on this tree: 59 browser transfers, 56
-signalling, 33 text and share, 31 PWA, 22 PIN, 17 history, 17 cross-tab merge,
-16 TURN, 14 origins, 11 route reporting, 6 rate limiting, 6 live relay, 5
-session lifetimes, 4 cold start. Counted against a production build, which is what CI runs: in `next dev`
+**318 checks across 15 suites**, counted on this tree: 59 browser transfers, 56
+signalling, 33 text and share, 31 PWA, 22 PIN, 21 partial storage, 17 history,
+17 cross-tab merge, 16 TURN, 14 origins, 11 route reporting, 6 rate limiting, 6
+live relay, 5 session lifetimes, 4 cold start. Counted against a production build, which is what CI runs: in `next dev`
 the PWA suite is one check shorter, because there is no service worker to cut
 the network on. All of them
 passed in one pass except two that cannot run against a development server: the
